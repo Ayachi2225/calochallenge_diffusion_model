@@ -1,0 +1,91 @@
+List of chi2 of the plotted histograms, see eq. 15 of 2009.03796 for its definition.
+Etot / Einc: 
+nan
+
+E layer 0: 
+nan
+
+E layer 1: 
+0.8760121012429907
+
+E layer 2: 
+0.6503357352310859
+
+E layer 3: 
+0.9848265108296177
+
+E layer 12: 
+0.9946266312249127
+
+EC Eta layer 1: 
+0.4997585393819083
+
+EC Eta layer 2: 
+0.3559918838883655
+
+EC Phi layer 1: 
+0.2172692397673002
+
+EC Phi layer 2: 
+0.36625822845111405
+
+Width Eta layer 1: 
+0.9972934097964554
+
+Width Eta layer 2: 
+0.991865626082791
+
+Width Phi layer 1: 
+0.9954286519718871
+
+Width Phi layer 2: 
+0.9939418015691677
+
+Etot / Einc at E = 256.0: 
+nan
+
+Etot / Einc at E = 512.0: 
+nan
+
+Etot / Einc at E = 1024.0: 
+nan
+
+Etot / Einc at E = 2048.0: 
+nan
+
+Etot / Einc at E = 4096.0: 
+nan
+
+Etot / Einc at E = 8192.0: 
+nan
+
+Etot / Einc at E = 16384.0: 
+nan
+
+Etot / Einc at E = 32768.0: 
+nan
+
+Etot / Einc at E = 65536.0: 
+nan
+
+Etot / Einc at E = 131072.0: 
+nan
+
+Etot / Einc at E = 262144.0: 
+nan
+
+Etot / Einc at E = 524288.0: 
+nan
+
+Etot / Einc at E = 1048576.0: 
+nan
+
+Etot / Einc at E = 2097152.0: 
+nan
+
+Etot / Einc at E = 4194304.0: 
+nan
+
+Voxel distribution: 
+0.1805393995194839
+

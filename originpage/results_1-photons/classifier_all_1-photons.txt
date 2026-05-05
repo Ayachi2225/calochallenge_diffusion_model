@@ -1,0 +1,16 @@
+parse_args():
+Namespace(input_file='./../generated_dataset1_photons_mena_pred.hdf5', reference_file='./../data/dataset_1_photons_2.hdf5', mode='all', dataset='1-photons', output_dir='results_1-photons', cls_resnet_layers=18, cls_n_layer=2, cls_n_hidden=2048, cls_dropout_probability=0.0, cls_batch_size=1000, cls_n_epochs=50, cls_lr=0.0002, prdc_k=5, prdc_ext=False, no_cuda=False, which_cuda=0, save_mem=False)
+parse_args():
+Namespace(input_file='./../generated_dataset1_photons_mean_pred.hdf5', reference_file='./../data/dataset_1_photons_2.hdf5', mode='all', dataset='1-photons', output_dir='results_1-photons', cls_resnet_layers=18, cls_n_layer=2, cls_n_hidden=2048, cls_dropout_probability=0.0, cls_batch_size=1000, cls_n_epochs=50, cls_lr=0.0002, prdc_k=5, prdc_ext=False, no_cuda=False, which_cuda=0, save_mem=False)
+parse_args():
+Namespace(input_file='./../generated_dataset1_photons_mean_pred.hdf5', reference_file='./../data/dataset_1_photons_2.hdf5', mode='all', dataset='1-photons', output_dir='results_1-photons', cls_resnet_layers=18, cls_n_layer=2, cls_n_hidden=2048, cls_dropout_probability=0.0, cls_batch_size=1000, cls_n_epochs=50, cls_lr=0.0002, prdc_k=5, prdc_ext=False, no_cuda=False, which_cuda=0, save_mem=False)
+parse_args():
+Namespace(input_file='./../generated_dataset1_photons_mean_pred.hdf5', reference_file='./../data/dataset_1_photons_2.hdf5', mode='all', dataset='1-photons', output_dir='results_1-photons', cls_resnet_layers=18, cls_n_layer=2, cls_n_hidden=2048, cls_dropout_probability=0.0, cls_batch_size=1000, cls_n_epochs=50, cls_lr=0.0002, prdc_k=5, prdc_ext=False, no_cuda=False, which_cuda=0, save_mem=False)
+parse_args():
+Namespace(input_file='./../generated_dataset1_photons_mean_pred.hdf5', reference_file='./../data/dataset_1_photons_2.hdf5', mode='all', dataset='1-photons', output_dir='results_1-photons', cls_resnet_layers=18, cls_n_layer=2, cls_n_hidden=2048, cls_dropout_probability=0.0, cls_batch_size=1000, cls_n_epochs=50, cls_lr=0.0002, prdc_k=5, prdc_ext=False, no_cuda=False, which_cuda=0, save_mem=False)
+parse_args():
+Namespace(input_file='./../generated_dataset1_photons_mean_pred.hdf5', reference_file='./../data/dataset_1_photons_2.hdf5', mode='all', dataset='1-photons', output_dir='results_1-photons', cls_resnet_layers=18, cls_n_layer=2, cls_n_hidden=2048, cls_dropout_probability=0.0, cls_batch_size=1000, cls_n_epochs=50, cls_lr=0.0002, prdc_k=5, prdc_ext=False, no_cuda=False, which_cuda=0, save_mem=False)
+parse_args():
+Namespace(input_file='./../generated_dataset1_photons_mean_pred.hdf5', reference_file='./../data/dataset_1_photons_2.hdf5', mode='all', dataset='1-photons', output_dir='results_1-photons', cls_resnet_layers=18, cls_n_layer=2, cls_n_hidden=2048, cls_dropout_probability=0.0, cls_batch_size=1000, cls_n_epochs=50, cls_lr=0.0002, prdc_k=5, prdc_ext=False, no_cuda=False, which_cuda=0, save_mem=False)
+parse_args():
+Namespace(input_file='./../generated_dataset1_photons_mean_pred.hdf5', reference_file='./../data/dataset_1_photons_2.hdf5', mode='all', dataset='1-photons', output_dir='results_1-photons', cls_resnet_layers=18, cls_n_layer=2, cls_n_hidden=2048, cls_dropout_probability=0.0, cls_batch_size=1000, cls_n_epochs=50, cls_lr=0.0002, prdc_k=5, prdc_ext=False, no_cuda=False, which_cuda=0, save_mem=False)

@@ -1,0 +1,11 @@
+
+data/  
+samples/
+models/
+.vscode/
+__pycache__/
+.claude/
+origin_py/
+results/
+run_command.sh
+

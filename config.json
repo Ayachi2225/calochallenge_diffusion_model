@@ -1,0 +1,67 @@
+{
+  "global": {
+    "t_dim": 128,
+    "e_dim": 128,
+    "energy_scale": 2.5,
+    "alpha": 1e-6,
+    "normalize_method": "logit",
+    "batch_size": 8,
+    "num_epochs": 150,
+    "lr": 4e-4,
+    "num_steps": 50,
+    "sample_method": "pndm",
+    "sample_eta": 0.0,
+    "cold_diffusion": false,
+    "cold_noise_scale": 1.0,
+    "num_energy_bins": 10,
+    "loss_every": 10,
+    "save_every": 20,
+    "energy_loss_scale": 0.0,
+    "fine_tune": false,
+    "weight_cache": "data/weight_mats.pkl",
+    "weight_decay": 1e-4
+  },
+
+  "datasets": {
+    "dataset1": {
+      "prenormalize_method": "log10",
+      "training_obj": "hybrid",
+      "reshape_method": "mask",
+      "TARGET_ALPHA": 10,
+      "particles": {
+        "photon": {
+          "energy_range": [256, 4194304],
+          "default_data": "data/dataset_1_photons_1.hdf5",
+          "default_xml": "data/binning_dataset_1_photons.xml"
+        },
+        "pion": {
+          "energy_range": [256, 4194304],
+          "default_data": "data/dataset_1_pions_1.hdf5",
+          "default_xml": "data/binning_dataset_1_pions.xml"
+        }
+      }
+    },
+    "dataset2": {
+      "prenormalize_method": "log1p",
+      "training_obj": "mean_pred",
+      "reshape_method": "weight",
+      "volume_size": [45, 9, 16],
+      "energy_range": [1000, 1000000],
+      "default_data": "data/dataset_2_1.hdf5",
+      "particles": {
+        "electron": {}
+      }
+    },
+    "dataset3": {
+      "prenormalize_method": "log1p",
+      "training_obj": "mean_pred",
+      "reshape_method": "weight",
+      "volume_size": [45, 18, 50],
+      "energy_range": [1000, 1000000],
+      "default_data": "data/dataset_3_1.hdf5",
+      "particles": {
+        "electron": {}
+      }
+    }
+  }
+}
