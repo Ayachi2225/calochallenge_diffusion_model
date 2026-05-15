@@ -10,8 +10,8 @@ from net import UNet3D
 class DDIMModel3D(nn.Module):
 
     def __init__(
-        self, 
-        t_dim: int = 128, 
+        self,
+        t_dim: int = 128,
         e_dim: int = 128,
         training_obj: str = 'noise_pred',  # 'noise_pred', 'mean_pred', 'hybrid'
         cold_diffusion: bool = False,
@@ -19,33 +19,44 @@ class DDIMModel3D(nn.Module):
         avg_showers: torch.Tensor = None,
         std_showers: torch.Tensor = None,
         cold_noise_scale: float = 1.0,
-        use_mask: bool = False,  # 新增：是否使用mask
+        use_mask: bool = False,
+        nn_converter: nn.Module = None,
+        nn_binning_info: dict = None,
+        irreg_shapes: list = None,
     ):
         super().__init__()
         self.schedule = VPSchedule()
         self.net = UNet3D(t_dim=t_dim, e_dim=e_dim)
-        
+
         self.training_obj = training_obj
         supported = ['noise_pred', 'mean_pred', 'hybrid', 'score_pred']
         if self.training_obj not in supported:
             raise ValueError(f"training_obj 必须是 {supported} 之一，但得到 '{training_obj}'")
-        
+
         self.cold_diffusion = cold_diffusion
         self.E_bins = E_bins
         self.avg_showers = avg_showers
         self.std_showers = std_showers
         self.cold_noise_scale = cold_noise_scale
-        
-        self.use_mask = use_mask  # 新增
-        
+
+        self.use_mask = use_mask
+
+        self.nn_converter = nn_converter
+        self.nn_binning_info = nn_binning_info
+        self.irreg_shapes = irreg_shapes
+
         print(f"[Model] 训练目标: {self.training_obj}")
         print(f"[Model] 使用mask: {self.use_mask}")
+        if self.nn_converter is not None:
+            print(f"[Model] NNConverter 已集成，共 {self.nn_converter.num_layers} 层")
         if self.cold_diffusion:
             print("[Model] 冷扩散模式已启用")
             if E_bins is None or avg_showers is None or std_showers is None:
                 raise ValueError("冷扩散模式需要提供 E_bins, avg_showers, std_showers")
 
     def _broadcast(self, rate: torch.Tensor) -> torch.Tensor:
+        if rate.ndim == 0:
+            rate = rate[None]
         return rate[:, None, None, None, None]
 
     def lookup_avg_std_shower(self, energies: torch.Tensor):
@@ -78,55 +89,123 @@ class DDIMModel3D(nn.Module):
         
         return cold_image
 
+    def _split_irreg(self, x_flat: torch.Tensor):
+        """Split [B, total_irreg] → list of [B, n_a, n_r] per valid layer."""
+        layers = []
+        start = 0
+        for n_a, n_r in self.irreg_shapes:
+            size = n_a * n_r
+            layers.append(x_flat[:, start:start + size].reshape(-1, n_a, n_r))
+            start += size
+        return layers
+
+    def _irreg_mse(self, pred_layers, target_layers):
+        """MSE loss over per-layer tensors, flattened to irregular voxels."""
+        pred_flat = torch.cat([p.reshape(p.shape[0], -1) for p in pred_layers], dim=1)
+        target_flat = torch.cat([t.reshape(t.shape[0], -1) for t in target_layers], dim=1)
+        return F.mse_loss(pred_flat, target_flat)
+
     def get_loss(
-        self, 
-        x0: torch.Tensor, 
+        self,
+        x0: torch.Tensor,
         energy: torch.Tensor,
-        mask: torch.Tensor = None,  # 新增：mask参数
+        mask: torch.Tensor = None,
         energy_loss_scale: float = 0.0
     ) -> torch.Tensor:
-        """
-        计算损失
-        Args:
-            x0: 真实数据 [B, C, D, H, W]
-            energy: 能量 [B, 1]
-            mask: mask数组 [B, C, D, H, W]，1表示有效，0表示mask区域
-            energy_loss_scale: 能量损失权重
-        """
         B = x0.shape[0]
         device = x0.device
-        
+
+        # ================================================================
+        #  nn_converter path: irregular → enc → regular → diffuse →
+        #  UNet predict → dec → loss in irregular space.
+        #  Both enc and dec receive gradients.
+        # ================================================================
+        if self.nn_converter is not None:
+            x0_flat = x0.squeeze(1).squeeze(1)                 # [B, total_irreg]
+            x0_layers = self._split_irreg(x0_flat)              # list of [B, n_a, n_r]
+            x0_reg = self.nn_converter.enc(x0_layers)           # [B, 1, L, A_out, R_out]
+
+            t = torch.rand(B, device=device)
+            sr, nr = self.schedule(t)
+            sr = self._broadcast(sr)
+            nr = self._broadcast(nr)
+
+            if self.cold_diffusion:
+                avg_shower, std_shower = self.lookup_avg_std_shower(energy)
+                noise_irreg = torch.randn_like(x0)
+                cold_irreg = avg_shower + self.cold_noise_scale * (std_shower * noise_irreg)
+                cold_flat = cold_irreg.squeeze(1).squeeze(1)
+                cold_layers = self._split_irreg(cold_flat)
+                eps_reg = self.nn_converter.enc(cold_layers)
+            else:
+                eps_reg = torch.randn_like(x0_reg)
+
+            x_t = sr * x0_reg + nr * eps_reg
+            net_output = self.net(x_t, t, energy)
+            sigma2 = nr ** 2
+
+            # Compute x0 prediction in regular space
+            if self.training_obj == 'noise_pred':
+                x0_pred_reg = (x_t - nr * net_output) / sr
+            elif self.training_obj == 'mean_pred':
+                x0_pred_reg = net_output
+            elif self.training_obj == 'hybrid':
+                c_skip = 1.0 / (sigma2 + 1.0)
+                c_out = torch.sqrt(sigma2) / torch.sqrt(sigma2 + 1.0)
+                x0_pred_reg = c_skip * x_t + c_out * net_output
+            elif self.training_obj == 'score_pred':
+                x0_pred_reg = (x_t + sigma2 * net_output) / sr
+
+            # Decode to irregular space → loss
+            pred_layers = self.nn_converter.dec(x0_pred_reg)
+            target_layers = self.nn_converter.dec(x0_reg)
+
+            loss = self._irreg_mse(pred_layers, target_layers)
+
+            if energy_loss_scale > 0:
+                pred_flat = torch.cat([p.reshape(B, -1) for p in pred_layers], dim=1)
+                target_flat = torch.cat([t.reshape(B, -1) for t in target_layers], dim=1)
+                loss_energy = energy_loss_scale * F.mse_loss(
+                    pred_flat.sum(dim=1), target_flat.sum(dim=1)
+                )
+                loss = loss + loss_energy
+
+            return loss
+
+        # ================================================================
+        #  standard path (weight / mask)
+        # ================================================================
         t = torch.rand(B, device=device)
-        
+
         sr, nr = self.schedule(t)  # signal_rate, noise_rate
         sr = self._broadcast(sr)
         nr = self._broadcast(nr)
-        
+
         eps = torch.randn_like(x0)
-        
+
         if self.cold_diffusion:
             avg_shower, std_shower = self.lookup_avg_std_shower(energy)
             eps = avg_shower + self.cold_noise_scale * (std_shower * torch.randn_like(x0))
-        
+
         x_t = sr * x0 + nr * eps
-        
+
         sigma2 = nr ** 2
-        
+
         net_output = self.net(x_t, t, energy)
-        
+
         # 计算基础loss
         if self.training_obj == 'noise_pred':
             target = eps
             pred = net_output
             loss_element = F.mse_loss(pred, target, reduction='none')
-            
+
         elif self.training_obj == 'mean_pred':
             target = x0
             pred = net_output
-            
+
             weight = 1.0 / (sigma2 + 1e-8)
             loss_element = weight * F.mse_loss(pred, target, reduction='none')
-            
+
         elif self.training_obj == 'hybrid':
             c_skip = 1.0 / (sigma2 + 1.0)
             c_out = torch.sqrt(sigma2) / torch.sqrt(sigma2 + 1.0)
@@ -143,23 +222,19 @@ class DDIMModel3D(nn.Module):
             target = -eps
             pred   = nr * net_output
             loss_element = F.mse_loss(pred, target, reduction='none')
-        
+
         # 应用mask（如果使用）
         if self.use_mask and mask is not None:
-            # mask: [B, C, D, H, W]，1为有效区域，0为mask区域
             loss_element = loss_element * mask
-            # 计算有效区域的平均loss
-            num_valid = mask.sum() + 1e-8  # 避免除零
+            num_valid = mask.sum() + 1e-8
             loss = loss_element.sum() / num_valid
         else:
-            # 不使用mask时，全局平均
             loss = loss_element.mean()
-        
-        # 能量损失（可选）
+
         if energy_loss_scale > 0:
             loss_energy = self._compute_energy_loss(x0, pred, energy_loss_scale, mask)
             loss = loss + loss_energy
-        
+
         return loss
     
     def _compute_energy_loss(
@@ -362,7 +437,7 @@ class DDIMModel3D(nn.Module):
         self,
         shape: tuple,
         energy: torch.Tensor,
-        num_steps: int = 50,
+        num_steps: int = 200,
         device: str = 'cpu',
         cold_noise_scale: float = 1.0,
         eta: float = 0.0,  # DDIM参数，0=确定性，1=DDPM

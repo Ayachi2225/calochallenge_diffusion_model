@@ -6,7 +6,7 @@
     "alpha": 1e-6,
     "normalize_method": "logit",
     "batch_size": 8,
-    "num_epochs": 150,
+    "num_epochs": 200,
     "lr": 4e-4,
     "num_steps": 50,
     "sample_method": "pndm",
@@ -24,7 +24,7 @@
 
   "datasets": {
     "dataset1": {
-      "prenormalize_method": "log10",
+      "prenormalize_method": "norm",
       "training_obj": "hybrid",
       "reshape_method": "mask",
       "TARGET_ALPHA": 10,
@@ -44,7 +44,7 @@
     "dataset2": {
       "prenormalize_method": "log1p",
       "training_obj": "mean_pred",
-      "reshape_method": "weight",
+      "reshape_method": "mask",
       "volume_size": [45, 9, 16],
       "energy_range": [1000, 1000000],
       "default_data": "data/dataset_2_1.hdf5",
@@ -55,7 +55,7 @@
     "dataset3": {
       "prenormalize_method": "log1p",
       "training_obj": "mean_pred",
-      "reshape_method": "weight",
+      "reshape_method": "mask",
       "volume_size": [45, 18, 50],
       "energy_range": [1000, 1000000],
       "default_data": "data/dataset_3_1.hdf5",

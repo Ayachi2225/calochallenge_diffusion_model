@@ -4,6 +4,7 @@ import argparse
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
+import matplotlib.pyplot as plt
 
 from model import DDIMModel3D
 from dataprocess import get_calo_dataloader
@@ -128,6 +129,10 @@ def train(config: dict, hdf5_path: str = None, max_samples: int = None,
     print(f"  径向处理方法: {config['reshape_method']}")  # 新增
     if config['reshape_method'] == 'mask':
         print(f"  使用mask覆盖: 是")
+    if config['reshape_method'] == 'nnconverter':
+        nc = loader.dataset.nn_converter
+        if nc is not None:
+            print(f"  NNConverter 层数: {nc.num_layers}, 输出维度: alpha={nc.alpha_out}, r={nc.dim_r_out}")
     print(f"{'='*70}\n")
 
     E_bins = loader.dataset.E_bins
@@ -135,10 +140,13 @@ def train(config: dict, hdf5_path: str = None, max_samples: int = None,
     std_showers = loader.dataset.std_showers
 
     # ====== 创建模型 ======
-    use_mask = (config['reshape_method'] == 'mask')  # 新增
-    
+    use_mask = (config['reshape_method'] == 'mask')
+    nn_converter = getattr(loader.dataset, 'nn_converter', None)
+    nn_binning_info = getattr(loader.dataset, 'nn_binning_info', None)
+    irreg_shapes = getattr(loader.dataset, 'irreg_shapes', None)
+
     model = DDIMModel3D(
-        t_dim=config['t_dim'], 
+        t_dim=config['t_dim'],
         e_dim=config['e_dim'],
         training_obj=config['training_obj'],
         cold_diffusion=config['cold_diffusion'],
@@ -146,11 +154,19 @@ def train(config: dict, hdf5_path: str = None, max_samples: int = None,
         avg_showers=avg_showers,
         std_showers=std_showers,
         cold_noise_scale=config['cold_noise_scale'],
-        use_mask=use_mask,  # 新增
+        use_mask=use_mask,
+        nn_converter=nn_converter,
+        nn_binning_info=nn_binning_info,
+        irreg_shapes=irreg_shapes,
     ).to(device)
-    
+
+    if nn_converter is not None:
+        print(f"[NNConverter] 编码器+解码器参数已纳入模型 (共 "
+              f"{sum(p.numel() for p in nn_converter.parameters())} 个)，"
+              f"两端均参与训练")
+
     optimizer = torch.optim.AdamW(
-        model.parameters(), 
+        model.parameters(),
         lr=config['lr'],
         weight_decay=1e-4
     )
@@ -173,7 +189,7 @@ def train(config: dict, hdf5_path: str = None, max_samples: int = None,
         print(f"发现检查点文件: {config['checkpoint']}")
         try:
             ckpt = torch.load(config['checkpoint'], map_location=device, weights_only=False)
-            model.load_state_dict(ckpt['model'])
+            model.load_state_dict(ckpt['model'], strict=False)
             optimizer.load_state_dict(ckpt['optim'])
             if 'scheduler' in ckpt:
                 last_epoch = ckpt.get('epoch', 0)+1
@@ -201,6 +217,7 @@ def train(config: dict, hdf5_path: str = None, max_samples: int = None,
     
     best_loss = float('inf')
     best_epoch = -1
+    loss_history = []
 
     for epoch in range(start_epoch, config['num_epochs']):
         model.train()
@@ -240,7 +257,8 @@ def train(config: dict, hdf5_path: str = None, max_samples: int = None,
 
         avg_loss   = total_loss / num_batches
         current_lr = scheduler.get_last_lr()[0]
-        
+        loss_history.append(avg_loss)
+
         if avg_loss < best_loss:
             best_loss = avg_loss
             best_epoch = epoch + 1
@@ -296,7 +314,7 @@ def train(config: dict, hdf5_path: str = None, max_samples: int = None,
             print(f"  → 样本保存至: {sample_path}")
             '''
             vmax = loader.dataset.vmax if hdf5_path else None
-            
+
             checkpoint_data = {
                 'model':                model.state_dict(),
                 'optim':                optimizer.state_dict(),
@@ -312,6 +330,8 @@ def train(config: dict, hdf5_path: str = None, max_samples: int = None,
                 'n_correct':            config['n_correct'],
                 'delta':                config['delta'],
                 'vmax':                 vmax,
+                'num_steps':            config['num_steps'],
+                'batch_size':           config['batch_size'],
                 'dataset_name':         dataset_name,
                 'volume_size':          config['volume_size'],
                 'normalize_method':     config['normalize_method'],
@@ -328,8 +348,10 @@ def train(config: dict, hdf5_path: str = None, max_samples: int = None,
                 'E_bins':               E_bins,
                 'avg_showers':          avg_showers,
                 'std_showers':          std_showers,
-                'reshape_method':       config['reshape_method'],  # 新增
-                'use_mask':             use_mask,  # 新增
+                'reshape_method':       config['reshape_method'],
+                'use_mask':             use_mask,
+                'nn_converter':         model.nn_converter,
+                'nn_binning_info':      model.nn_binning_info,
             }
             
             torch.save(checkpoint_data, config['checkpoint'])
@@ -347,6 +369,20 @@ def train(config: dict, hdf5_path: str = None, max_samples: int = None,
     print(f"  最佳损失: {best_loss:.5f} (Epoch {best_epoch})")
     print(f"  最终检查点: {config['checkpoint']}")
     print(f"{'='*70}")
+
+    # 绘制 loss 曲线
+    plt.figure(figsize=(10, 5))
+    plt.plot(range(1, len(loss_history) + 1), loss_history, marker='o', markersize=3, linewidth=1.5)
+    plt.xlabel('Epoch')
+    plt.ylabel('Loss')
+    plt.title(f'Training Loss — {dataset_name}_{particle} ({config["training_obj"]})')
+    plt.grid(True, alpha=0.3)
+    if best_epoch > 0:
+        plt.axvline(x=best_epoch, color='r', linestyle='--', alpha=0.5, label=f'Best (epoch {best_epoch})')
+        plt.legend()
+    plt.tight_layout()
+    plt.savefig(f'loss_curve_{dataset_name}_{particle}{obj_suffix}{cold_suffix}.png', dpi=150)
+    plt.show()
 
 
 if __name__ == '__main__':
@@ -385,8 +421,8 @@ if __name__ == '__main__':
                             default=cfg.get('weight_cache', 'data/weight_mats.pkl'))
     data_group.add_argument('--reshape_method', type=str,
                             default=cfg.get('reshape_method', 'weight'),
-                            choices=['weight', 'mask'],
-                            help='径向处理方法: weight=面积权重插值, mask=向内填充+mask')
+                            choices=['weight', 'mask', 'nnconverter'],
+                            help='径向处理方法: weight=面积权重插值, mask=向内填充+mask, nnconverter=可训练几何转换')
     data_group.add_argument('--prenormalize_method', type=str,
                             default=cfg.get('prenormalize_method', 'log10'),
                             choices=['log10', 'log1p', 'sqrt'],
@@ -471,7 +507,12 @@ if __name__ == '__main__':
 # 1. 使用mask方法训练 Dataset1
 python train.py --data data/dataset_1_photons_1.hdf5 --dataset dataset1 \
     --xml data/binning_dataset_1_photons.xml --particle photon \
-    --reshape_method mask --training_obj mean_pred --epochs 200 --max_samples 100
+    --reshape_method mask --training_obj mean_pred --epochs 200 --max_samples 200 \
+
+python train.py --data data/dataset_1_photons_1.hdf5 --dataset dataset1 \
+    --xml data/binning_dataset_1_photons.xml --particle photon \
+    --reshape_method nnconverter --training_obj mean_pred --epochs 200 --max_samples 200 \
+    --sample_method ddim --sample_eta 0.0 --num_steps 200
 
 python train.py --data data/dataset_1_photons_1.hdf5 --dataset dataset1 \
     --xml data/binning_dataset_1_photons.xml --particle photon \
@@ -479,12 +520,12 @@ python train.py --data data/dataset_1_photons_1.hdf5 --dataset dataset1 \
 
 python train.py --data data/dataset_1_photons_1.hdf5 --dataset dataset1 \
     --xml data/binning_dataset_1_photons.xml --particle photon \
-    --reshape_method mask --training_obj noise_pred --epochs 200 --max_samples 100
+    --reshape_method mask --training_obj hybrid --epochs 200 --max_samples 200
 
 # 2. 使用weight方法训练（默认，兼容原有代码）
 python train.py --data data/dataset_1_photons_1.hdf5 --dataset dataset1 \
     --xml data/binning_dataset_1_photons.xml --particle photon \
-    --reshape_method weight --training_obj mean_pred --epochs 200 --max_samples 100
+    --reshape_method weight --training_obj mean_pred --epochs 200 --max_samples 200
 
 # 3. mask方法 + 冷扩散
 python train.py --data data/dataset_1_photons_1.hdf5 --dataset dataset1 \
@@ -493,5 +534,5 @@ python train.py --data data/dataset_1_photons_1.hdf5 --dataset dataset1 \
     --cold_diffusion --num_energy_bins 10 --epochs 200
 
 # 4. Dataset2 (不受影响，默认全1 mask)
-python train.py  --dataset dataset2 --training_obj mean_pred --epochs 150 --max_samples 100
+python train.py  --dataset dataset2 --training_obj mean_pred --epochs 150 
 '''

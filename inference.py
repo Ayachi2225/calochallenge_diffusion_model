@@ -11,7 +11,7 @@ def inference(
     checkpoint_path: str,
     output_path: str,
     dataset_name: str = 'dataset2',
-    num_samples: int = 1000,
+    num_samples: int = None,
     batch_size: int = 16,
     num_steps: int = 50,
     energy_distribution: str = 'uniform',
@@ -97,7 +97,7 @@ def inference(
         use_mask=use_mask,
     ).to(device)
     
-    model.load_state_dict(ckpt['model'])
+    model.load_state_dict(ckpt['model'], strict=False)
     model.eval()
     
     normalize_method = ckpt.get('normalize_method', None)
@@ -285,7 +285,7 @@ if __name__ == '__main__':
    python inference.py --checkpoint models/ddim3d_dataset2_electron_mean_pred_best.pt --output generated_dataset2.hdf5 --dataset dataset2 --num_samples 10 --distribution load --energy_file_dir data/dataset_2_1.hdf5 --seed 42
 
 2. 从文件加载能量:
-   python inference.py --checkpoint models/ddim3d_dataset2_electron_hybrid_best.pt --output generated_dataset2.hdf5 --dataset dataset2 --num_samples 10 --distribution load --energy_file_dir data/dataset_2_1.hdf5 --seed 42
+   python inference.py --checkpoint models/ddim3d_dataset2_electron_mean_pred_best.pt --output dataset2_results/generated_dataset2.hdf5 --dataset dataset2 --distribution load --energy_file_dir data/test_data.hdf5 --seed 42 --batch_size 32
    python inference.py --checkpoint models/ddim3d_dataset2_electron_mean_pred_E0.1_best.pt --output generated_dataset2_energykeep.hdf5 --dataset dataset2 --num_samples 10 --distribution load --energy_file_dir data/dataset_2_1.hdf5 --seed 42
 
 3. 使用DDIM快速采样:
@@ -376,7 +376,7 @@ if __name__ == '__main__':
                            help='数据集名称')
     data_group.add_argument('--particle', type=str, default='electron',
                            choices=['electron'], help='粒子类型')
-    data_group.add_argument('--num_samples', type=int, default=1000,
+    data_group.add_argument('--num_samples', type=int, default=200,
                            help='生成样本数')
     
     energy_group = parser.add_argument_group('能量参数')

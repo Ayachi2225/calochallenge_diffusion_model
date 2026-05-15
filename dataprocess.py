@@ -1,6 +1,7 @@
 import h5py
 import numpy as np
 import torch
+import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 from utils import prenormalize_showers, load_config
 from dataset1_preprocess import resample_alpha, TARGET_ALPHA
@@ -10,6 +11,277 @@ from dataset1_preprocess import (
     build_mask_info,
     get_all_voxel_counts
 )
+
+
+def resample_alpha_torch(layer: torch.Tensor, src_alpha: int, dst_alpha: int) -> torch.Tensor:
+    """角度方向重采样（torch版本），layer shape: [..., src_alpha, R] → [..., dst_alpha, R]"""
+    if src_alpha == dst_alpha:
+        return layer
+
+    src_edges = torch.linspace(0, 1, src_alpha + 1)
+    dst_edges = torch.linspace(0, 1, dst_alpha + 1)
+
+    W_a = torch.zeros(dst_alpha, src_alpha)
+    for src in range(src_alpha):
+        a_lo = src_edges[src]
+        a_hi = src_edges[src + 1]
+        da_src = a_hi - a_lo
+        for dst in range(dst_alpha):
+            lo = dst_edges[dst]
+            hi = dst_edges[dst + 1]
+            overlap = max(0.0, min(a_hi, hi) - max(a_lo, lo))
+            if overlap > 0:
+                W_a[dst, src] = overlap / da_src
+
+    return torch.einsum('...sr,...ds->...dr', layer, W_a)
+
+
+def resample_alpha_inverse_torch(layer: torch.Tensor, src_alpha: int, dst_alpha: int) -> torch.Tensor:
+    """角度方向重采样逆变换（torch版本），layer shape: [..., src_alpha, R] → [..., dst_alpha, R]"""
+    if src_alpha == dst_alpha:
+        return layer
+
+    src_edges = torch.linspace(0, 1, src_alpha + 1)
+    dst_edges = torch.linspace(0, 1, dst_alpha + 1)
+
+    W_a = torch.zeros(dst_alpha, src_alpha)
+    for dst in range(dst_alpha):
+        a_lo = dst_edges[dst]
+        a_hi = dst_edges[dst + 1]
+        da_dst = a_hi - a_lo
+        for src in range(src_alpha):
+            lo = src_edges[src]
+            hi = src_edges[src + 1]
+            overlap = max(0.0, min(a_hi, hi) - max(a_lo, lo))
+            if overlap > 0:
+                W_a[dst, src] = overlap / da_dst
+
+    return torch.einsum('...sr,...ds->...dr', layer, W_a)
+
+
+ENERGY_SCALE = 1  # mirrors utils.energy_scale
+
+
+def normalize_volume_torch(volume, energies, stats, alpha=1e-6):
+    """Torch version of prenormalize_showers using precomputed stats.
+
+    Args:
+        volume:   [N, 1, L, A, R] encoded volume
+        energies: [N, 1] energy values
+        stats:    dict with prenormalize_method, normalize_method, vmax,
+                  log_mean/log_std or logit_mean/logit_std
+        alpha:    small offset for numerical stability
+
+    Returns:
+        [N, 1, L, A, R] normalized volume
+    """
+    prenormalize_method = stats['prenormalize_method']
+    vmax = stats['vmax']
+    normalize_method = stats['normalize_method']
+    e = energies.view(-1, 1, 1, 1, 1)
+
+    if prenormalize_method == 'log10':
+        volume = torch.log10(volume + 1e-9)
+        e_log = torch.log10(e + 1e-9)
+        volume = volume / e_log * ENERGY_SCALE
+        x = alpha + (1 - 2 * alpha) * volume / vmax
+    elif prenormalize_method == 'log1p':
+        volume = volume / (e + 1e-9)
+        volume_log = torch.log1p(volume)
+        x = alpha + (1 - 2 * alpha) * volume_log / vmax
+    elif prenormalize_method == 'norm':
+        volume = volume / (e + 1e-9)
+        x = alpha + (1 - 2 * alpha) * volume / vmax
+    elif prenormalize_method == 'sqrt':
+        volume = volume / (e + 1e-9)
+        volume_sqrt = torch.sqrt(volume)
+        x = alpha + (1 - 2 * alpha) * volume_sqrt / vmax
+    else:
+        raise ValueError(f"Unknown prenormalize_method: {prenormalize_method}")
+
+    if normalize_method == 'log':
+        volume = x * 2 - 1
+        volume = (volume - stats['log_mean']) / stats['log_std']
+    elif normalize_method == 'logit':
+        x = torch.clamp(x, 1e-9, 1 - 1e-9)
+        volume = torch.log(x / (1 - x))
+        volume = (volume - stats['logit_mean']) / stats['logit_std']
+    else:
+        raise ValueError(f"Unknown normalize_method: {normalize_method}")
+
+    return volume
+
+
+class NNConverter(nn.Module):
+    """Trainable geometric conversion for irregular → regular radial binning.
+
+    Initialized from fixed weight_mats (area-overlap weights), then learns
+    improved mappings during training.  The decoder learns the pseudo-inverse,
+    enabling reconstruction back to the original detector geometry at inference.
+
+    Args:
+        weight_mats: list of weight matrices [M_i × n_r_i] per layer
+        lay_r_edges: list of r-edge arrays per layer
+        lay_alphas:  list of alpha counts per layer
+        dim_r_out:   uniform radial output dimension (M)
+        alpha_out:   uniform angular output dimension (TARGET_ALPHA)
+        eps:         noise scale for weight initialization
+    """
+
+    def __init__(self, weight_mats, lay_r_edges, lay_alphas, dim_r_out, alpha_out, eps=1e-5):
+        super().__init__()
+        self.lay_r_edges = lay_r_edges
+        self.lay_alphas = lay_alphas
+        self.dim_r_out = dim_r_out
+        self.alpha_out = alpha_out
+        self.num_layers = len(weight_mats)
+
+        self.encs = nn.ModuleList([])
+        self.decs = nn.ModuleList([])
+
+        for i in range(self.num_layers):
+            rdim_in = len(lay_r_edges[i]) - 1
+
+            enc = nn.Linear(rdim_in, dim_r_out, bias=False)
+            noise = torch.randn_like(weight_mats[i])
+            enc.weight.data = weight_mats[i] + eps * noise
+            self.encs.append(enc)
+
+            dec = nn.Linear(dim_r_out, rdim_in, bias=False)
+            inv_init = torch.linalg.pinv(weight_mats[i])
+            noise2 = torch.randn_like(inv_init)
+            dec.weight.data = inv_init + eps * noise2
+            self.decs.append(dec)
+
+    def enc(self, layers):
+        """Encode per-layer tensors to uniform geometry.
+
+        Args:
+            layers: list of [N, n_alpha_i, n_r_i] tensors
+
+        Returns:
+            [N, 1, num_layers, alpha_out, dim_r_out]
+        """
+        n_shower = layers[0].shape[0]
+        device = layers[0].device
+
+        out = torch.zeros((n_shower, 1, self.num_layers, self.alpha_out, self.dim_r_out),
+                          device=device)
+        for i in range(len(layers)):
+            o = self.encs[i](layers[i])  # [N, n_alpha_i, dim_r_out]
+
+            if self.lay_alphas[i] == 1:
+                o = torch.repeat_interleave(o, self.alpha_out, dim=-2) / self.alpha_out
+            elif self.lay_alphas[i] != self.alpha_out:
+                o = resample_alpha_torch(o, self.lay_alphas[i], self.alpha_out)
+
+            out[:, 0, i] = o
+        return out
+
+    def dec(self, x):
+        """Decode uniform geometry back to per-layer tensors.
+
+        Args:
+            x: [N, 1, num_layers, alpha_out, dim_r_out]
+               or [N, num_layers, alpha_out, dim_r_out]
+
+        Returns:
+            list of [N, n_alpha_i, n_r_i] tensors
+        """
+        if x.dim() == 5:
+            x = x.squeeze(1)
+
+        out = []
+        for i in range(self.num_layers):
+            o = self.decs[i](x[:, i])  # [N, alpha_out, n_r_i]
+
+            if self.lay_alphas[i] == 1:
+                o = torch.sum(o, dim=-2, keepdim=True)
+            elif self.lay_alphas[i] != self.alpha_out:
+                o = resample_alpha_inverse_torch(o, self.alpha_out, self.lay_alphas[i])
+
+            out.append(o)
+        return out
+
+    def forward(self, x):
+        return self.enc(x)
+
+    def sync_decoder(self):
+        """Update decoder weights to pseudo-inverse of trained encoder weights.
+
+        Call this after training before using dec() for inference-time
+        reverse mapping.  This ensures the decoder reflects whatever the
+        encoder learned during training.
+        """
+        with torch.no_grad():
+            for i in range(self.num_layers):
+                self.decs[i].weight.data = torch.linalg.pinv(self.encs[i].weight.data)
+
+    def decode_to_flat(self, x, bin_starts, bin_ends, valid_layer_indices, all_counts):
+        """Decode and flatten back to original shower voxel format.
+
+        Args:
+            x:                    [N, 1, num_layers, alpha_out, dim_r_out] model output
+            bin_starts:           list of start indices per layer in original shower
+            bin_ends:             list of end indices per layer in original shower
+            valid_layer_indices:  list of absolute layer indices for valid layers
+            all_counts:           total voxel count per layer (n_alpha * n_r)
+
+        Returns:
+            [N, total_voxels] tensor in original detector geometry
+        """
+        layers = self.dec(x)  # list of [N, n_alpha_i, n_r_i], one per valid layer
+        n_shower = layers[0].shape[0]
+        total_voxels = sum(all_counts)
+        device = layers[0].device
+
+        out = torch.zeros((n_shower, total_voxels), device=device)
+        for out_idx, lid in enumerate(valid_layer_indices):
+            n_a = self.lay_alphas[out_idx]
+            n_r = len(self.lay_r_edges[out_idx]) - 1
+            flat = layers[out_idx].reshape(n_shower, n_a * n_r)
+            out[:, bin_starts[lid]:bin_ends[lid]] = flat
+        return out
+
+
+def load_nnconverter_from_checkpoint(checkpoint_path: str, device: str = 'cpu'):
+    """Load NNConverter from a training checkpoint for inference-time decoding.
+
+    Returns (nn_converter, nn_binning_info) or (None, None) if the checkpoint
+    was trained without nnconverter.
+    """
+    ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
+    nc = ckpt.get('nn_converter', None)
+    bi = ckpt.get('nn_binning_info', None)
+    if nc is None:
+        print("[NNConverter] Checkpoint 中未找到 nn_converter，无需几何逆转换")
+        return None, None
+    nc.eval()
+    print(f"[NNConverter] 已从检查点加载，共 {nc.num_layers} 层")
+    return nc, bi
+
+
+def decode_samples_with_checkpoint(samples, checkpoint_path: str, device: str = 'cpu'):
+    """Decode model samples back to original detector geometry using NNConverter.
+
+    Args:
+        samples:         [N, 1, L, A, R] model output in uniform geometry
+        checkpoint_path: path to training checkpoint containing nn_converter
+        device:          torch device
+
+    Returns:
+        [N, total_voxels] tensor in original irregular geometry, or None if
+        the checkpoint has no nn_converter.
+    """
+    nc, bi = load_nnconverter_from_checkpoint(checkpoint_path, device)
+    if nc is None or bi is None:
+        return None
+    nc = nc.to(device)
+    return nc.decode_to_flat(
+        samples.to(device),
+        bi['bin_starts'], bi['bin_ends'],
+        bi['valid_layer_indices'], bi['all_counts']
+    )
 
 
 class CaloDataset(Dataset):
@@ -49,6 +321,13 @@ class CaloDataset(Dataset):
         # mask相关
         self.masks = None  # 每个样本的mask，shape: [N, 1, L, A, R]
 
+        # nnconverter
+        self.nn_converter = None
+        self.nn_binning_info = None  # {bin_starts, bin_ends, lay_ids, all_counts}
+        self.raw_layers = None       # list of [N, n_a_i, n_r_i] tensors (nnconverter mode)
+        self.raw_energies = None     # [N, 1] raw energy values in MeV (nnconverter mode)
+        self._norm_stats = None      # normalization stats dict (nnconverter mode)
+
         if dataset_name == 'dataset1':
             self._load_dataset1(
                 hdf5_path, xml_path, particle,
@@ -69,19 +348,34 @@ class CaloDataset(Dataset):
 
         lay_ids, lay_r_edges, lay_alphas = parse_binning_xml(xml_path, particle)
 
+        valid_layer_indices = [
+            i for i, r in enumerate(lay_r_edges) if len(r) > 1
+        ]
+
         # 判断使用哪种方法
-        if self.reshape_method == 'weight':
+        if self.reshape_method in ('weight', 'nnconverter'):
             all_r_edges, weight_mats = build_weight_mats(
                 lay_r_edges, cache_path=weight_cache
             )
             M = len(all_r_edges) - 1
             mask_list = None
+
+            if self.reshape_method == 'nnconverter':
+                self.nn_converter = NNConverter(
+                    weight_mats=[torch.from_numpy(weight_mats[i]) for i in valid_layer_indices],
+                    lay_r_edges=[lay_r_edges[i] for i in valid_layer_indices],
+                    lay_alphas=[lay_alphas[i] for i in valid_layer_indices],
+                    dim_r_out=M,
+                    alpha_out=TARGET_ALPHA,
+                )
+                print(f"[Dataset1] NNConverter 已创建，共 {self.nn_converter.num_layers} 层 "
+                      f"(过滤掉 {len(lay_r_edges) - len(valid_layer_indices)} 个无效层)")
         elif self.reshape_method == 'mask':
             M, mask_list = build_mask_info(lay_r_edges)
             weight_mats = None
             all_r_edges = None
         else:
-            raise ValueError(f"reshape_method 必须是 'weight' 或 'mask'，但得到 '{self.reshape_method}'")
+            raise ValueError(f"reshape_method 必须是 'weight', 'mask' 或 'nnconverter'，但得到 '{self.reshape_method}'")
 
         all_counts = get_all_voxel_counts(xml_path, particle)
 
@@ -98,70 +392,135 @@ class CaloDataset(Dataset):
         if ecut > 0:
             showers[showers < ecut] = 0.0
 
-        valid_layer_indices = [
-            i for i, r in enumerate(lay_r_edges) if len(r) > 1
-        ]
+        if self.reshape_method == 'nnconverter':
+            self.nn_binning_info = {
+                'bin_starts': bin_starts,
+                'bin_ends': bin_ends,
+                'lay_ids': lay_ids,
+                'all_counts': all_counts,
+                'valid_layer_indices': valid_layer_indices,
+            }
 
         N = showers.shape[0]
         L_valid = len(valid_layer_indices)
 
         self.volume_size = (L_valid, TARGET_ALPHA, M)
 
-        volume = np.zeros((N, L_valid, TARGET_ALPHA, M), dtype=np.float32)
-        
-        # 创建mask数组
-        if self.reshape_method == 'mask':
-            masks = np.zeros((N, L_valid, TARGET_ALPHA, M), dtype=np.float32)
+        # ================================================================
+        #  nnconverter 分支: 保持不规则几何，直接归一化后输入网络
+        #  enc/dec 在模型内部参与计算图
+        # ================================================================
+        if self.reshape_method == 'nnconverter':
+            self.raw_layers = []
+            irreg_parts = []
+            self.irreg_shapes = []  # [(n_a, n_r)] per valid layer
+            for out_idx, i in enumerate(valid_layer_indices):
+                n_a = lay_alphas[i]
+                n_r = len(lay_r_edges[i]) - 1
+                layer = showers[:, bin_starts[i]:bin_ends[i]].reshape(N, n_a, n_r)
+                self.raw_layers.append(torch.from_numpy(layer.copy()).float())
+                self.irreg_shapes.append((n_a, n_r))
+                irreg_parts.append(layer.reshape(N, n_a * n_r))
 
-        for out_idx, i in enumerate(valid_layer_indices):
-            n_a = lay_alphas[i]
-            n_r = len(lay_r_edges[i]) - 1
+            irreg_flat = np.concatenate(irreg_parts, axis=1)  # [N, total_irreg]
+            energies_raw = energies.copy()
+            energies_4d = energies.reshape(-1, 1, 1, 1)
 
-            # [N, n_a, n_r]
-            layer = showers[:, bin_starts[i]:bin_ends[i]].reshape(N, n_a, n_r)
+            # 归一化在不规则数据上进行
+            volume_for_norm = irreg_flat.reshape(N, 1, 1, -1)
+            volume, stats = prenormalize_showers(
+                volume_for_norm, energies_4d, self.alpha,
+                self.prenormalize_method, self.normalize_method
+            )
+            if 'log_mean' in stats:
+                self.log_mean = stats['log_mean']
+                self.log_std = stats['log_std']
+            if 'logit_mean' in stats:
+                self.logit_mean = stats['logit_mean']
+                self.logit_std = stats['logit_std']
+            self.vmax = stats.get('vmax', 1.0)
+            self.prenormalize_method = stats.get('prenormalize_method', self.prenormalize_method)
 
-            if self.reshape_method == 'weight':
-                layer = np.einsum('nar,mr->nam', layer, weight_mats[i])
-                
-            elif self.reshape_method == 'mask':
-                layer_padded = np.zeros((N, n_a, M), dtype=np.float32)
-                layer_padded[:, :, :n_r] = layer  # 前n_r个bin填充数据
-                layer = layer_padded
-                
-                layer_mask = np.zeros((N, TARGET_ALPHA, M), dtype=np.float32)
-                layer_mask[:, :, :] = mask_list[i][None, None, :]  # broadcast到[N, TARGET_ALPHA, M]
+            self.raw_energies = torch.from_numpy(energies_raw).float()
+            self._norm_stats = {
+                'normalize_method': self.normalize_method,
+                'prenormalize_method': self.prenormalize_method,
+                'vmax': self.vmax,
+            }
+            if 'log_mean' in stats:
+                self._norm_stats['log_mean'] = stats['log_mean']
+                self._norm_stats['log_std'] = stats['log_std']
+            if 'logit_mean' in stats:
+                self._norm_stats['logit_mean'] = stats['logit_mean']
+                self._norm_stats['logit_std'] = stats['logit_std']
 
-            # 角度重采样到 TARGET_ALPHA：[N, TARGET_ALPHA, M]
-            layer = resample_alpha(layer, n_a, TARGET_ALPHA)
+            energies = np.log10(energies.reshape(-1, 1))
+            e_min, e_max = self.cfg['energy_range']
+            log_emin, log_emax = np.log10(e_min), np.log10(e_max)
+            energies = (energies - log_emin) / (log_emax - log_emin)
 
-            volume[:, out_idx] = layer
-            
-            if self.reshape_method == 'mask':
-                masks[:, out_idx] = layer_mask
-        energies = energies.reshape(-1,1,1,1)
-        volume, stats = prenormalize_showers(volume, energies, self.alpha, self.prenormalize_method, self.normalize_method)
-        if 'log_mean' in stats:
-            self.log_mean = stats['log_mean']
-            self.log_std = stats['log_std']
-        if 'logit_mean' in stats:
-            self.logit_mean = stats['logit_mean']
-            self.logit_std = stats['logit_std']
-        self.vmax = stats.get('vmax', 1.0)
-        self.prenormalize_method = stats.get('prenormalize_method', self.prenormalize_method)
-        energies = np.log10(energies.reshape(-1,1))
-        e_min, e_max = self.cfg['energy_range']
-        log_emin, log_emax = np.log10(e_min), np.log10(e_max)
-        energies = (energies-log_emin)/(log_emax-log_emin)
-
-        self.showers = torch.from_numpy(volume[:, None]).float()
-        self.energies = torch.from_numpy(energies).float()
-
-        if self.reshape_method == 'mask':
-            self.masks = torch.from_numpy(masks[:, None]).float()
-            print(f"[Dataset1] masks shape: {self.masks.shape}")
-        else:
-            # weight方法下，全部区域有效
+            # [N, 1, 1, total_irreg]
+            self.showers = torch.from_numpy(volume).float()
+            self.energies = torch.from_numpy(energies).float()
             self.masks = torch.ones_like(self.showers)
+
+        else:
+            # ============================================================
+            #  weight / mask 分支: 现有逻辑不变
+            # ============================================================
+            volume = np.zeros((N, L_valid, TARGET_ALPHA, M), dtype=np.float32)
+
+            if self.reshape_method == 'mask':
+                masks = np.zeros((N, L_valid, TARGET_ALPHA, M), dtype=np.float32)
+
+            for out_idx, i in enumerate(valid_layer_indices):
+                n_a = lay_alphas[i]
+                n_r = len(lay_r_edges[i]) - 1
+
+                layer = showers[:, bin_starts[i]:bin_ends[i]].reshape(N, n_a, n_r)
+
+                if self.reshape_method == 'weight':
+                    layer = np.einsum('nar,mr->nam', layer, weight_mats[i])
+                elif self.reshape_method == 'mask':
+                    layer_padded = np.zeros((N, n_a, M), dtype=np.float32)
+                    layer_padded[:, :, :n_r] = layer
+                    layer = layer_padded
+                    layer_mask = np.zeros((N, TARGET_ALPHA, M), dtype=np.float32)
+                    layer_mask[:, :, :] = mask_list[i][None, None, :]
+
+                layer = resample_alpha(layer, n_a, TARGET_ALPHA)
+                volume[:, out_idx] = layer
+
+                if self.reshape_method == 'mask':
+                    masks[:, out_idx] = layer_mask
+
+            energies_4d = energies.reshape(-1, 1, 1, 1)
+            volume, stats = prenormalize_showers(
+                volume, energies_4d, self.alpha,
+                self.prenormalize_method, self.normalize_method
+            )
+            if 'log_mean' in stats:
+                self.log_mean = stats['log_mean']
+                self.log_std = stats['log_std']
+            if 'logit_mean' in stats:
+                self.logit_mean = stats['logit_mean']
+                self.logit_std = stats['logit_std']
+            self.vmax = stats.get('vmax', 1.0)
+            self.prenormalize_method = stats.get('prenormalize_method', self.prenormalize_method)
+
+            energies = np.log10(energies.reshape(-1, 1))
+            e_min, e_max = self.cfg['energy_range']
+            log_emin, log_emax = np.log10(e_min), np.log10(e_max)
+            energies = (energies - log_emin) / (log_emax - log_emin)
+
+            self.showers = torch.from_numpy(volume[:, None]).float()
+            self.energies = torch.from_numpy(energies).float()
+
+            if self.reshape_method == 'mask':
+                self.masks = torch.from_numpy(masks[:, None]).float()
+                print(f"[Dataset1] masks shape: {self.masks.shape}")
+            else:
+                self.masks = torch.ones_like(self.showers)
 
     def _load_dataset_standard(self, hdf5_path, max_samples):
         D, H, W = self.cfg['volume_size']
@@ -330,6 +689,11 @@ def get_calo_dataloader(
         prenormalize_method=prenormalize_method,
         config_path=config_path,
     )
+
+    if reshape_method == 'nnconverter' and num_workers > 0:
+        print("[NNConverter] 警告: nnconverter 模式下 num_workers 将被强制设为 0 "
+              "(可训练模块无法跨进程共享)")
+        num_workers = 0
 
     return DataLoader(
         dataset,

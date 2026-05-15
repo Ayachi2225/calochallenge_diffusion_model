@@ -187,8 +187,6 @@ def inference(
     print(f"  XML 配置: {xml_path}")
     print(f"  设备: {device}")
     print(f"  样本数: {num_samples}")
-    print(f"  批次大小: {batch_size}")
-    print(f"  采样步数: {num_steps}")
     print(f"  能量分布: {energy_distribution}")
     if seed is not None:
         print(f"  随机种子: {seed}")
@@ -200,12 +198,28 @@ def inference(
     # 加载检查点以确定使用哪种方法
     print("加载模型检查点...")
     ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
+    num_steps = ckpt.get('num_steps', num_steps)
+    batch_size = ckpt.get('batch_size', batch_size)
+    print(f"  采样步数: {num_steps}")
+    print(f"  批次大小: {batch_size}")
+
     
     reshape_method = ckpt.get('reshape_method', 'weight')  # 默认使用weight方法以兼容旧模型
     print(f"  径向处理方法: {reshape_method}")
     
     # 根据方法选择不同的处理流程
-    if reshape_method == 'weight':
+    nn_converter = None
+    nn_binning_info = None
+    if reshape_method == 'nnconverter':
+        nn_converter = ckpt.get('nn_converter')
+        nn_binning_info = ckpt.get('nn_binning_info')
+        if nn_converter is None:
+            raise ValueError("检查点中未找到 nn_converter，无法使用 nnconverter 方法")
+        M = nn_converter.dim_r_out
+        all_r_edges = None
+        print(f"  NNConverter: {nn_converter.num_layers} 层, "
+              f"alpha_out={nn_converter.alpha_out}, dim_r_out={M}")
+    elif reshape_method == 'weight':
         all_r_edges, weight_mats = build_weight_mats(lay_r_edges, cache_path=weight_cache)
         M = len(all_r_edges) - 1
     elif reshape_method == 'mask':
@@ -271,7 +285,7 @@ def inference(
         use_mask=use_mask,
     ).to(device)
     
-    model.load_state_dict(ckpt['model'])
+    model.load_state_dict(ckpt['model'], strict=False)
     model.eval()
     
     normalize_method = ckpt.get('normalize_method', None)
@@ -377,7 +391,20 @@ def inference(
     )
     
     print("重建为原始 HDF5 格式...")
-    if reshape_method == 'weight':
+    if reshape_method == 'nnconverter':
+        volume_t = torch.from_numpy(all_volumes[:, None]).float().to(device)
+        nn_converter = nn_converter.to(device)
+        nn_converter.eval()
+        with torch.no_grad():
+            all_showers = nn_converter.decode_to_flat(
+                volume_t,
+                nn_binning_info['bin_starts'],
+                nn_binning_info['bin_ends'],
+                nn_binning_info['valid_layer_indices'],
+                nn_binning_info['all_counts'],
+            ).cpu().numpy()
+        print(f"  NNConverter 解码完成: {all_showers.shape}")
+    elif reshape_method == 'weight':
         reverse_weight_mats = build_conservative_reverse_weight_mats(lay_r_edges, all_r_edges)
         all_showers = reconstruct_original_format_weight(
             all_volumes,
@@ -488,8 +515,8 @@ if __name__ == '__main__':
        --seed 42
 
    python inference_dataset1.py \
-       --checkpoint models/ddim3d_dataset1_photon_noise_pred_mask_best.pt \
-       --output generated_dataset1_photons_mask.hdf5 \
+       --checkpoint models/ddim3d_dataset1_photon_mean_pred_best.pt \
+       --output generated_dataset1_photons_mean_pred_nn.hdf5 \
        --xml data/binning_dataset_1_photons.xml \
        --particle photon \
        --num_samples 10 \
@@ -497,8 +524,8 @@ if __name__ == '__main__':
        --seed 42
 
    python inference_dataset1.py \
-       --checkpoint models/ddim3d_dataset1_photon_hybrid_mask_best.pt \
-       --output generated_dataset1_photons_mask.hdf5 \
+       --checkpoint models/ddim3d_dataset1_photon_hybrid_best.pt \
+       --output generated_dataset1_photons_hybrid_nn.hdf5 \
        --xml data/binning_dataset_1_photons.xml \
        --particle photon \
        --num_samples 10 \

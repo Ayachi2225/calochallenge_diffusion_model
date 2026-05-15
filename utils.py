@@ -35,7 +35,7 @@ def load_config(config_path: str = None, dataset_name: str = None, particle: str
     return merged
 
 
-def generate_energies(num_samples: int, distribution: str, 
+def generate_energies(num_samples: int , distribution: str, 
                      e_min: float, e_max: float, 
                      seed: int = None,constant_energy: float = None,energy_file_dir:str =None) -> np.ndarray:
     if seed is not None:
@@ -78,7 +78,7 @@ def generate_energies(num_samples: int, distribution: str,
     
     return energies.astype(np.float32)
 
-energy_scale = 2.5
+energy_scale = 1
 def normalize_energies(energies: np.ndarray, e_min: float, e_max: float) -> np.ndarray:
     log_min = np.log10(e_min)
     log_max = np.log10(e_max)
@@ -111,6 +111,10 @@ def prenormalize_showers(showers, energies, alpha=1e-6, prenormalize_method='log
         showers_log = np.log1p(showers)
         vmax = showers_log.max()
         x = alpha + (1 - 2*alpha) * showers_log / vmax
+    elif prenormalize_method == 'norm':
+        showers = showers/(energies + 1e-9)
+        vmax = showers.max()
+        x = alpha + (1 - 2*alpha) * showers / vmax
     elif prenormalize_method == 'sqrt':
         showers = showers/(energies + 1e-9)
         showers_sqrt = np.sqrt(showers)
@@ -169,6 +173,9 @@ def denormalize_showers(showers, energies, stats, alpha=1e-6, prenormalize_metho
         s_log = (x - alpha) / (1 - 2*alpha) * vmax
         s = np.expm1(s_log)
         showers = s * (energies + 1e-9)
+    elif prenormalize_method == 'norm':
+        s_norm = (x - alpha) / (1 - 2*alpha) * vmax
+        showers = s_norm * (energies + 1e-9)
     elif prenormalize_method == 'sqrt':
         s_sqrt = (x - alpha) / (1 - 2*alpha) * vmax
         s = s_sqrt ** 2
