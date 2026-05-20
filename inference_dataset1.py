@@ -38,8 +38,8 @@ def inverse_resample_alpha(layer: np.ndarray, src_alpha: int, dst_alpha: int) ->
 
 
 def build_conservative_reverse_weight_mats(lay_r_edges: list, all_r_edges: list):
-    """构建保守逆向重采样矩阵（用于weight方法）"""
-    print("[INFO] 构建保守逆向重采样矩阵...")
+    """Build conservative inverse resampling matrices (for weight method)"""
+    print("[INFO] Building conservative inverse resampling matrices...")
     M = len(all_r_edges) - 1
     reverse_weight_mats = []
     
@@ -72,7 +72,7 @@ def reconstruct_original_format_weight(
     lay_alphas: list,
     reverse_weight_mats: list,
 ) -> np.ndarray:
-    """使用weight方法重建原始格式"""
+    """Reconstruct original format using weight method"""
     N = volume.shape[0]
     
     valid_layer_indices = [
@@ -115,7 +115,7 @@ def reconstruct_original_format_mask(
     lay_r_edges: list,
     lay_alphas: list,
 ) -> np.ndarray:
-    """使用mask方法重建原始格式（直接裁剪）"""
+    """Reconstruct original format using mask method (direct crop)"""
     N = volume.shape[0]
     
     valid_layer_indices = [
@@ -143,10 +143,10 @@ def reconstruct_original_format_mask(
         # [N, TARGET_ALPHA, max_r_bins]
         layer = volume[:, out_idx, :, :]
         
-        # 角度逆重采样到原始n_a
+        # Inverse angular resample to original n_a
         layer = inverse_resample_alpha(layer, TARGET_ALPHA, n_a)
-        
-        # 径向直接裁剪到前n_r个bin（mask方法）
+
+        # Direct radial crop to first n_r bins (mask method)
         layer_reconstructed = layer[:, :, :n_r]  # [N, n_a, n_r]
         
         layer_flat = layer_reconstructed.reshape(N, -1)
@@ -179,45 +179,45 @@ def inference(
         device = 'cuda' if torch.cuda.is_available() else 'cpu'
     
     print(f"{'='*70}")
-    print(f"推理配置:")
-    print(f"  模型检查点: {checkpoint_path}")
-    print(f"  输出文件: {output_path}")
-    print(f"  数据集: dataset1")
-    print(f"  粒子类型: {particle}")
-    print(f"  XML 配置: {xml_path}")
-    print(f"  设备: {device}")
-    print(f"  样本数: {num_samples}")
-    print(f"  能量分布: {energy_distribution}")
+    print(f"Inference config:")
+    print(f"  Model checkpoint: {checkpoint_path}")
+    print(f"  Output file: {output_path}")
+    print(f"  Dataset: dataset1")
+    print(f"  Particle type: {particle}")
+    print(f"  XML config: {xml_path}")
+    print(f"  Device: {device}")
+    print(f"  Num samples: {num_samples}")
+    print(f"  Energy distribution: {energy_distribution}")
     if seed is not None:
-        print(f"  随机种子: {seed}")
+        print(f"  Random seed: {seed}")
     print(f"{'='*70}\n")
     
-    print("解析XML几何配置...")
+    print("Parsing XML geometry config...")
     lay_ids, lay_r_edges, lay_alphas = parse_binning_xml(xml_path, particle)
     
-    # 加载检查点以确定使用哪种方法
-    print("加载模型检查点...")
+    # Load checkpoint to determine which method to use
+    print("Loading model checkpoint...")
     ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
     num_steps = ckpt.get('num_steps', num_steps)
     batch_size = ckpt.get('batch_size', batch_size)
-    print(f"  采样步数: {num_steps}")
-    print(f"  批次大小: {batch_size}")
+    print(f"  Sampling steps: {num_steps}")
+    print(f"  Batch size: {batch_size}")
 
-    
-    reshape_method = ckpt.get('reshape_method', 'weight')  # 默认使用weight方法以兼容旧模型
-    print(f"  径向处理方法: {reshape_method}")
-    
-    # 根据方法选择不同的处理流程
+
+    reshape_method = ckpt.get('reshape_method', 'weight')  # Default to weight for backward compatibility
+    print(f"  Radial processing method: {reshape_method}")
+
+    # Choose processing flow based on method
     nn_converter = None
     nn_binning_info = None
     if reshape_method == 'nnconverter':
         nn_converter = ckpt.get('nn_converter')
         nn_binning_info = ckpt.get('nn_binning_info')
         if nn_converter is None:
-            raise ValueError("检查点中未找到 nn_converter，无法使用 nnconverter 方法")
+            raise ValueError("nn_converter not found in checkpoint, cannot use nnconverter method")
         M = nn_converter.dim_r_out
         all_r_edges = None
-        print(f"  NNConverter: {nn_converter.num_layers} 层, "
+        print(f"  NNConverter: {nn_converter.num_layers} layers, "
               f"alpha_out={nn_converter.alpha_out}, dim_r_out={M}")
     elif reshape_method == 'weight':
         all_r_edges, weight_mats = build_weight_mats(lay_r_edges, cache_path=weight_cache)
@@ -226,7 +226,7 @@ def inference(
         M, mask_list = build_mask_info(lay_r_edges)
         all_r_edges = None
     else:
-        raise ValueError(f"未知的reshape_method: {reshape_method}")
+        raise ValueError(f"Unknown reshape_method: {reshape_method}")
     
     valid_layer_indices = [
         i for i, r in enumerate(lay_r_edges) if len(r) > 1
@@ -234,12 +234,12 @@ def inference(
     L_valid = len(valid_layer_indices)
     
     volume_size = (L_valid, TARGET_ALPHA, M)
-    print(f"  体积尺寸: {L_valid} 层 × {TARGET_ALPHA} 角度 × {M} 径向")
-    print(f"  总层数: {len(lay_ids)}, 有效层数: {L_valid}\n")
+    print(f"  Volume size: {L_valid} layers × {TARGET_ALPHA} angles × {M} radial")
+    print(f"  Total layers: {len(lay_ids)}, Valid layers: {L_valid}\n")
     
     cfg = load_config(None, 'dataset1', particle)
     e_min, e_max = cfg['energy_range']
-    print(f"能量范围: {e_min} - {e_max} MeV ({particle})\n")
+    print(f"Energy range: {e_min} - {e_max} MeV ({particle})\n")
     
     training_obj = ckpt.get('training_obj', 'noise_pred')
     cold_diffusion = ckpt.get('cold_diffusion', False)
@@ -255,20 +255,20 @@ def inference(
     n_correct = ckpt.get('n_correct', n_correct)
     delta = ckpt.get('delta', delta)
     
-    print(f"模型信息:")
-    print(f"  训练轮次: {ckpt['epoch']}")
-    print(f"  训练目标: {training_obj}")
-    print(f"  使用mask: {use_mask}")
-    print(f"  冷扩散: {cold_diffusion}")
+    print(f"Model info:")
+    print(f"  Training epoch: {ckpt['epoch']}")
+    print(f"  Training objective: {training_obj}")
+    print(f"  Using mask: {use_mask}")
+    print(f"  Cold diffusion: {cold_diffusion}")
     if cold_diffusion:
-        print(f"  能量区间数: {len(E_bins) - 1 if E_bins is not None else 0}")
-        print(f"  噪声缩放: {cold_noise_scale}")
-    print(f"  采样方法: {sample_method}")
+        print(f"  Num energy bins: {len(E_bins) - 1 if E_bins is not None else 0}")
+        print(f"  Noise scale: {cold_noise_scale}")
+    print(f"  Sampling method: {sample_method}")
     if sample_method == 'ddim':
         print(f"  DDIM eta: {sample_eta}")
     if sample_method == 'pc':
-        print(f"  PC 修正次数: {n_correct}")
-        print(f"  PC 步长系数: {delta}")
+        print(f"  PC correction steps: {n_correct}")
+        print(f"  PC step size coefficient: {delta}")
     print()
     
     t_dim = cfg.get('t_dim', 128)
@@ -294,15 +294,15 @@ def inference(
     logit_mean = ckpt.get('logit_mean', None)
     logit_std = ckpt.get('logit_std', None)
     
-    print(f"归一化参数:")
-    print(f"  方法: {normalize_method}")
+    print(f"Normalization parameters:")
+    print(f"  Method: {normalize_method}")
     if normalize_method == 'log':
         print(f"  log_mean: {log_mean}, log_std: {log_std}")
     elif normalize_method == 'logit':
         print(f"  logit_mean: {logit_mean}, logit_std: {logit_std}")
     print()
     
-    print(f"生成 {num_samples} 个能量样本 (分布: {energy_distribution})...")
+    print(f"Generating {num_samples} energy samples (distribution: {energy_distribution})...")
     energies = generate_energies(
         num_samples, 
         energy_distribution, 
@@ -313,19 +313,19 @@ def inference(
         energy_file_dir=energy_file_dir
     )
     
-    print(f"能量统计:")
-    print(f"  最小值: {energies.min():.2f} MeV")
-    print(f"  最大值: {energies.max():.2f} MeV")
-    print(f"  平均值: {energies.mean():.2f} MeV")
-    print(f"  中位数: {np.median(energies):.2f} MeV")
-    print(f"  标准差: {energies.std():.2f} MeV\n")
+    print(f"Energy statistics:")
+    print(f"  Min: {energies.min():.2f} MeV")
+    print(f"  Max: {energies.max():.2f} MeV")
+    print(f"  Mean: {energies.mean():.2f} MeV")
+    print(f"  Median: {np.median(energies):.2f} MeV")
+    print(f"  Std: {energies.std():.2f} MeV\n")
     
     energies_log = np.log10(energies.reshape(-1, 1, 1, 1))
     energies_norm = normalize_energies(energies_log, e_min, e_max)
     energies_norm = energies_norm.reshape(-1, 1)
     
     D, H, W = volume_size
-    print(f"开始生成 showers (方法: {sample_method}, 步数: {num_steps})...")
+    print(f"Starting shower generation (method: {sample_method}, steps: {num_steps})...")
     all_volumes = []
     
     num_batches = (num_samples + batch_size - 1) // batch_size
@@ -355,15 +355,15 @@ def inference(
             all_volumes.append(samples.cpu().numpy())
             
             if (i + 1) % max(1, num_batches // 10) == 0 or (i + 1) == num_batches:
-                print(f"  批次 {i+1}/{num_batches} 完成 "
-                      f"({end_idx}/{num_samples} 样本, "
+                print(f"  Batch {i+1}/{num_batches} complete "
+                      f"({end_idx}/{num_samples} samples, "
                       f"{end_idx/num_samples*100:.1f}%)")
     
     all_volumes = np.concatenate(all_volumes, axis=0)
     all_volumes = all_volumes.squeeze(1)
     
     if ckpt.get('fine_tune', False):
-        print("\n应用 fine-tune 后处理...")
+        print("\nApplying fine-tune post-processing...")
         all_volumes = decontinue_fine_tune(
             all_volumes, 
             energies_norm, 
@@ -373,7 +373,7 @@ def inference(
             alpha=ckpt.get('alpha', 1e-6)
         )
     
-    print("\n反归一化 showers...")
+    print("\nDenormalizing showers...")
     stats = {
         'normalize_method': normalize_method,
         'log_mean': log_mean,
@@ -390,7 +390,7 @@ def inference(
         vmax=vmax,
     )
     
-    print("重建为原始 HDF5 格式...")
+    print("Reconstructing to original HDF5 format...")
     if reshape_method == 'nnconverter':
         volume_t = torch.from_numpy(all_volumes[:, None]).float().to(device)
         nn_converter = nn_converter.to(device)
@@ -403,7 +403,7 @@ def inference(
                 nn_binning_info['valid_layer_indices'],
                 nn_binning_info['all_counts'],
             ).cpu().numpy()
-        print(f"  NNConverter 解码完成: {all_showers.shape}")
+        print(f"  NNConverter decode complete: {all_showers.shape}")
     elif reshape_method == 'weight':
         reverse_weight_mats = build_conservative_reverse_weight_mats(lay_r_edges, all_r_edges)
         all_showers = reconstruct_original_format_weight(
@@ -423,23 +423,23 @@ def inference(
     
     energies = energies.reshape(-1, 1)
     
-    print(f"\nShowers 统计:")
-    print(f"  形状: {all_showers.shape}")
-    print(f"  最小值: {all_showers.min():.6f} MeV")
-    print(f"  最大值: {all_showers.max():.6f} MeV")
-    print(f"  平均值: {all_showers.mean():.6f} MeV")
-    print(f"  中位数: {np.median(all_showers):.6f} MeV")
-    print(f"  非零比例: {(all_showers > 0).sum() / all_showers.size * 100:.2f}%")
+    print(f"\nShower statistics:")
+    print(f"  Shape: {all_showers.shape}")
+    print(f"  Min: {all_showers.min():.6f} MeV")
+    print(f"  Max: {all_showers.max():.6f} MeV")
+    print(f"  Mean: {all_showers.mean():.6f} MeV")
+    print(f"  Median: {np.median(all_showers):.6f} MeV")
+    print(f"  Non-zero ratio: {(all_showers > 0).sum() / all_showers.size * 100:.2f}%")
     
     total_deposited = all_showers.sum(axis=1)
     energy_ratio = total_deposited / energies.squeeze()
-    print(f"\n能量守恒检查:")
-    print(f"  沉积能量 / 入射能量:")
-    print(f"    平均值: {energy_ratio.mean():.4f}")
-    print(f"    标准差: {energy_ratio.std():.4f}")
-    print(f"    范围: [{energy_ratio.min():.4f}, {energy_ratio.max():.4f}]")
+    print(f"\nEnergy conservation check:")
+    print(f"  Deposited / Incident energy:")
+    print(f"    Mean: {energy_ratio.mean():.4f}")
+    print(f"    Std: {energy_ratio.std():.4f}")
+    print(f"    Range: [{energy_ratio.min():.4f}, {energy_ratio.max():.4f}]")
     
-    print(f"\n保存到 {output_path}...")
+    print(f"\nSaving to {output_path}...")
     os.makedirs(os.path.dirname(output_path) if os.path.dirname(output_path) else '.', 
                 exist_ok=True)
     
@@ -484,27 +484,27 @@ def inference(
         f.attrs['energy_ratio_std'] = energy_ratio.std()
     
     print(f"\n{'='*70}")
-    print("推理完成！")
-    print(f"  输出文件: {output_path}")
-    print(f"  生成样本数: {num_samples}")
-    print(f"  粒子类型: {particle}")
-    print(f"  训练目标: {training_obj}")
-    print(f"  径向处理: {reshape_method}")
-    print(f"  采样方法: {sample_method}")
+    print("Inference complete!")
+    print(f"  Output file: {output_path}")
+    print(f"  Generated samples: {num_samples}")
+    print(f"  Particle type: {particle}")
+    print(f"  Training objective: {training_obj}")
+    print(f"  Radial processing: {reshape_method}")
+    print(f"  Sampling method: {sample_method}")
     if sample_method == 'pc':
-        print(f"  PC 参数: n_correct={n_correct}, delta={delta}")
-    print(f"  能量守恒: {energy_ratio.mean():.4f} ± {energy_ratio.std():.4f}")
+        print(f"  PC params: n_correct={n_correct}, delta={delta}")
+    print(f"  Energy conservation: {energy_ratio.mean():.4f} ± {energy_ratio.std():.4f}")
     print(f"{'='*70}")
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(
-        description='Dataset1 推理生成（支持三种训练目标和多种采样方法）',
+        description='Dataset1 inference (supports multiple training objectives and sampling methods)',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-示例:
+Examples:
 
-1. 使用mask方法训练的模型推理:
+1. Inference with mask-method trained model:
    python inference_dataset1.py \
        --checkpoint models/ddim3d_dataset1_photon_mean_pred_mask_best.pt \
        --output generated_dataset1_photons_mask.hdf5 \
@@ -531,8 +531,8 @@ if __name__ == '__main__':
        --num_samples 10 \
        --distribution load --energy_file_dir data/dataset_1_photons_2.hdf5 \
        --seed 42
-       
-2. 使用weight方法训练的模型推理（兼容旧模型）:
+
+2. Inference with weight-method trained model (backward compatible):
    python inference_dataset1.py \
        --checkpoint models/ddim3d_dataset1_photon_mean_pred_best.pt \
        --output generated_dataset1_photons_weight.hdf5 \
@@ -542,7 +542,7 @@ if __name__ == '__main__':
        --distribution load --energy_file_dir data/dataset_1_photons_2.hdf5 \
        --seed 42
 
-3. Pions推理:
+3. Pions inference:
    python inference_dataset1.py \\
        --checkpoint ddim3d_dataset1_pion.pt \\
        --output generated_dataset1_pions.hdf5 \\
@@ -552,7 +552,7 @@ if __name__ == '__main__':
        --distribution normal \\
        --seed 42
 
-4. DDIM快速采样:
+4. Fast DDIM sampling:
    python inference_dataset1.py \\
        --checkpoint ddim3d_dataset1_photon_hybrid_mask.pt \\
        --output generated_fast.hdf5 \\
@@ -563,7 +563,7 @@ if __name__ == '__main__':
        --num_steps 25 \\
        --num_samples 500
 
-5. 分数扩散 — Euler-Maruyama 随机采样:
+5. Score-based diffusion -- Euler-Maruyama stochastic sampling:
    python inference_dataset1.py \\
        --checkpoint ddim3d_dataset1_photon_hybrid_mask.pt \\
        --output generated_em.hdf5 \\
@@ -573,7 +573,7 @@ if __name__ == '__main__':
        --num_steps 200 \\
        --num_samples 500
 
-6. 分数扩散 — Predictor-Corrector 高质量采样:
+6. Score-based diffusion -- Predictor-Corrector high quality sampling:
    python inference_dataset1.py \\
        --checkpoint ddim3d_dataset1_photon_hybrid_mask.pt \\
        --output generated_pc.hdf5 \\
@@ -583,7 +583,7 @@ if __name__ == '__main__':
        --num_steps 100 --n_correct 2 --delta 0.17 \\
        --num_samples 500
 
-7. 分数扩散 — Probability Flow ODE 确定性采样:
+7. Score-based diffusion -- Probability Flow ODE deterministic sampling:
    python inference_dataset1.py \\
        --checkpoint ddim3d_dataset1_photon_hybrid_mask.pt \\
        --output generated_pf.hdf5 \\
@@ -595,66 +595,66 @@ if __name__ == '__main__':
         """
     )
     
-    required = parser.add_argument_group('必需参数')
+    required = parser.add_argument_group('Required')
     required.add_argument('--checkpoint', type=str, required=True,
-                         help='模型检查点路径')
+                         help='Model checkpoint path')
     required.add_argument('--output', type=str, required=True,
-                         help='输出 HDF5 文件路径')
+                         help='Output HDF5 file path')
     required.add_argument('--xml', type=str, required=True,
-                         help='XML 几何配置文件路径')
-    
-    data_group = parser.add_argument_group('数据集参数')
+                         help='XML geometry config file path')
+
+    data_group = parser.add_argument_group('Dataset params')
     data_group.add_argument('--particle', type=str, default='photon',
                            choices=['photon', 'pion'],
-                           help='粒子类型')
+                           help='Particle type')
     data_group.add_argument('--num_samples', type=int, default=1000,
-                           help='生成样本数')
+                           help='Number of generated samples')
     data_group.add_argument('--weight_cache', type=str, default='data/weight_mats.pkl',
-                           help='权重矩阵缓存路径')
-    
-    energy_group = parser.add_argument_group('能量参数')
+                           help='Weight matrix cache path')
+
+    energy_group = parser.add_argument_group('Energy params')
     energy_group.add_argument('--distribution', type=str, default='uniform',
-                             choices=['uniform', 'normal', 'lognormal', 
+                             choices=['uniform', 'normal', 'lognormal',
                                      'exponential', 'constant', 'load'],
-                             help='能量分布类型')
+                             help='Energy distribution type')
     energy_group.add_argument('--constant_energy', type=float, default=None,
-                             help='常数能量值 (当 distribution=constant 时使用，单位:MeV)')
+                             help='Constant energy value (used when distribution=constant, unit: MeV)')
     energy_group.add_argument('--energy_file_dir', type=str, default=None,
-                             help='能量文件路径 (当 distribution=load 时使用)')
-    
-    sample_group = parser.add_argument_group('采样参数')
+                             help='Energy file path (used when distribution=load)')
+
+    sample_group = parser.add_argument_group('Sampling params')
     sample_group.add_argument('--sample_method', type=str, default=None,
                              choices=['pndm', 'ddim', 'euler_maruyama', 'prob_flow', 'pc'],
-                             help='采样方法 (None=使用检查点设置)')
+                             help='Sampling method (None=use checkpoint setting)')
     sample_group.add_argument('--num_steps', type=int, default=50,
-                             help='采样步数')
+                             help='Sampling steps')
     sample_group.add_argument('--sample_eta', type=float, default=None,
-                             help='DDIM随机性参数 (0=确定性, 1=DDPM, None=使用检查点设置)')
+                             help='DDIM randomness param (0=deterministic, 1=DDPM, None=use checkpoint setting)')
     sample_group.add_argument('--n_correct', type=int, default=1,
-                             help='PC采样朗之万修正次数')
+                             help='PC Langevin correction steps')
     sample_group.add_argument('--delta', type=float, default=0.17,
-                             help='PC采样朗之万步长系数')
+                             help='PC Langevin step size coefficient')
     sample_group.add_argument('--batch_size', type=int, default=16,
-                             help='批次大小')
-    
-    cold_group = parser.add_argument_group('冷扩散参数')
+                             help='Batch size')
+
+    cold_group = parser.add_argument_group('Cold diffusion params')
     cold_group.add_argument('--cold_noise_scale', type=float, default=1.0,
-                           help='冷扩散噪声缩放因子 (仅冷扩散模型)')
-    
-    other_group = parser.add_argument_group('其他参数')
+                           help='Cold diffusion noise scaling factor (cold diffusion models only)')
+
+    other_group = parser.add_argument_group('Other params')
     other_group.add_argument('--seed', type=int, default=None,
-                            help='随机种子 (可选)')
+                            help='Random seed (optional)')
     other_group.add_argument('--device', type=str, default=None,
                             choices=['cuda', 'cpu'],
-                            help='计算设备 (默认: 自动检测)')
+                            help='Compute device (default: auto-detect)')
     
     args = parser.parse_args()
     
     if args.distribution == 'load' and args.energy_file_dir is None:
-        parser.error("--distribution load 需要提供 --energy_file_dir")
+        parser.error("--distribution load requires --energy_file_dir")
     
     if args.sample_eta is not None and (args.sample_eta < 0 or args.sample_eta > 1):
-        parser.error("--sample_eta 必须在 [0, 1] 范围内")
+        parser.error("--sample_eta must be in [0, 1] range")
     
     inference(
         checkpoint_path=args.checkpoint,

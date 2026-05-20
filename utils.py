@@ -74,7 +74,7 @@ def generate_energies(num_samples: int , distribution: str,
         energies = np.clip(energies, e_min, e_max)
         
     else:
-        raise ValueError(f"不支持的分布类型: {distribution}")
+        raise ValueError(f"Unsupported distribution type: {distribution}")
     
     return energies.astype(np.float32)
 
@@ -131,7 +131,7 @@ def prenormalize_showers(showers, energies, alpha=1e-6, prenormalize_method='log
         showers = x * 2 - 1
         mean = showers.mean()
         std = showers.std()
-        print(f"[Normalization] log方法: mean={mean:.4f}, std={std:.4f}")
+        print(f"[Normalization] log method: mean={mean:.4f}, std={std:.4f}")
         stats['log_mean'] = mean
         stats['log_std'] = std
         showers = (showers - mean) / std
@@ -140,7 +140,7 @@ def prenormalize_showers(showers, energies, alpha=1e-6, prenormalize_method='log
         showers = np.ma.log(x / (1 - x)).filled(0)
         mean = showers.mean()
         std = showers.std()
-        print(f"[Normalization] logit方法: mean={mean:.4f}, std={std:.4f}")
+        print(f"[Normalization] logit method: mean={mean:.4f}, std={std:.4f}")
         stats['logit_mean'] = mean
         stats['logit_std'] = std
         showers = (showers - mean) / std

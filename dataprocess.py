@@ -14,7 +14,7 @@ from dataset1_preprocess import (
 
 
 def resample_alpha_torch(layer: torch.Tensor, src_alpha: int, dst_alpha: int) -> torch.Tensor:
-    """角度方向重采样（torch版本），layer shape: [..., src_alpha, R] → [..., dst_alpha, R]"""
+    """Angular resampling (torch version), layer shape: [..., src_alpha, R] → [..., dst_alpha, R]"""
     if src_alpha == dst_alpha:
         return layer
 
@@ -37,7 +37,7 @@ def resample_alpha_torch(layer: torch.Tensor, src_alpha: int, dst_alpha: int) ->
 
 
 def resample_alpha_inverse_torch(layer: torch.Tensor, src_alpha: int, dst_alpha: int) -> torch.Tensor:
-    """角度方向重采样逆变换（torch版本），layer shape: [..., src_alpha, R] → [..., dst_alpha, R]"""
+    """Inverse angular resampling (torch version), layer shape: [..., src_alpha, R] → [..., dst_alpha, R]"""
     if src_alpha == dst_alpha:
         return layer
 
@@ -254,10 +254,10 @@ def load_nnconverter_from_checkpoint(checkpoint_path: str, device: str = 'cpu'):
     nc = ckpt.get('nn_converter', None)
     bi = ckpt.get('nn_binning_info', None)
     if nc is None:
-        print("[NNConverter] Checkpoint 中未找到 nn_converter，无需几何逆转换")
+        print("[NNConverter] nn_converter not found in checkpoint, no geometric inverse conversion needed")
         return None, None
     nc.eval()
-    print(f"[NNConverter] 已从检查点加载，共 {nc.num_layers} 层")
+    print(f"[NNConverter] Loaded from checkpoint, {nc.num_layers} layers total")
     return nc, bi
 
 
@@ -318,8 +318,8 @@ class CaloDataset(Dataset):
         self.prenormalize_method = prenormalize_method
         self.cfg = load_config(config_path, dataset_name, particle)
         
-        # mask相关
-        self.masks = None  # 每个样本的mask，shape: [N, 1, L, A, R]
+        # mask related
+        self.masks = None  # per-sample mask, shape: [N, 1, L, A, R]
 
         # nnconverter
         self.nn_converter = None
@@ -344,7 +344,7 @@ class CaloDataset(Dataset):
         self, hdf5_path, xml_path, particle,
         max_samples, weight_cache, ecut
     ):
-        print(f"[Dataset1] 使用 {self.reshape_method} 方法进行径向处理")
+        print(f"[Dataset1] Using {self.reshape_method} method for radial processing")
 
         lay_ids, lay_r_edges, lay_alphas = parse_binning_xml(xml_path, particle)
 
@@ -352,7 +352,7 @@ class CaloDataset(Dataset):
             i for i, r in enumerate(lay_r_edges) if len(r) > 1
         ]
 
-        # 判断使用哪种方法
+        # Determine which method to use
         if self.reshape_method in ('weight', 'nnconverter'):
             all_r_edges, weight_mats = build_weight_mats(
                 lay_r_edges, cache_path=weight_cache
@@ -368,14 +368,14 @@ class CaloDataset(Dataset):
                     dim_r_out=M,
                     alpha_out=TARGET_ALPHA,
                 )
-                print(f"[Dataset1] NNConverter 已创建，共 {self.nn_converter.num_layers} 层 "
-                      f"(过滤掉 {len(lay_r_edges) - len(valid_layer_indices)} 个无效层)")
+                print(f"[Dataset1] NNConverter created, {self.nn_converter.num_layers} layers "
+                      f"({len(lay_r_edges) - len(valid_layer_indices)} invalid layers filtered out)")
         elif self.reshape_method == 'mask':
             M, mask_list = build_mask_info(lay_r_edges)
             weight_mats = None
             all_r_edges = None
         else:
-            raise ValueError(f"reshape_method 必须是 'weight', 'mask' 或 'nnconverter'，但得到 '{self.reshape_method}'")
+            raise ValueError(f"reshape_method must be 'weight', 'mask' or 'nnconverter', got '{self.reshape_method}'")
 
         all_counts = get_all_voxel_counts(xml_path, particle)
 
@@ -407,8 +407,8 @@ class CaloDataset(Dataset):
         self.volume_size = (L_valid, TARGET_ALPHA, M)
 
         # ================================================================
-        #  nnconverter 分支: 保持不规则几何，直接归一化后输入网络
-        #  enc/dec 在模型内部参与计算图
+        #  nnconverter branch: keep irregular geometry, normalize directly then feed to network
+        #  enc/dec participate in the computation graph inside the model
         # ================================================================
         if self.reshape_method == 'nnconverter':
             self.raw_layers = []
@@ -426,7 +426,7 @@ class CaloDataset(Dataset):
             energies_raw = energies.copy()
             energies_4d = energies.reshape(-1, 1, 1, 1)
 
-            # 归一化在不规则数据上进行
+            # Normalization on irregular data
             volume_for_norm = irreg_flat.reshape(N, 1, 1, -1)
             volume, stats = prenormalize_showers(
                 volume_for_norm, energies_4d, self.alpha,
@@ -466,7 +466,7 @@ class CaloDataset(Dataset):
 
         else:
             # ============================================================
-            #  weight / mask 分支: 现有逻辑不变
+            #  weight / mask branch: existing logic unchanged
             # ============================================================
             volume = np.zeros((N, L_valid, TARGET_ALPHA, M), dtype=np.float32)
 
@@ -545,7 +545,7 @@ class CaloDataset(Dataset):
         self.showers = torch.from_numpy(showers.reshape(-1, 1, D, H, W)).float()
         self.energies = torch.from_numpy(energies).float()
 
-        # dataset2/3使用全1 mask（全部有效）
+        # dataset2/3 use all-ones mask (all voxels valid)
         self.masks = torch.ones_like(self.showers)
         
     def _continue_fine_tune(self):
@@ -553,7 +553,7 @@ class CaloDataset(Dataset):
         self.showers = showers
         
     def lookup_avg_std_shower(self, energies: torch.Tensor):
-        """根据能量查找对应的平均和标准差 shower"""
+        """Look up avg and std shower by energy"""
         # energies: [B, 1]
         energies_flat = energies.squeeze()
         
@@ -585,7 +585,7 @@ class CaloDataset(Dataset):
     
 
     def _compute_cold_statistics(self):
-        print(f"\n计算统计数据 (能量区间数: {self.num_energy_bins})")
+        print(f"\nComputing statistics (num energy bins: {self.num_energy_bins})")
         energies_flat = self.energies.squeeze()
         
         e_min, e_max = energies_flat.min(), energies_flat.max()
@@ -597,7 +597,7 @@ class CaloDataset(Dataset):
         for i in range(self.num_energy_bins):
             mask = (energies_flat >= self.E_bins[i]) & (energies_flat < self.E_bins[i+1])
             
-            if i == self.num_energy_bins - 1:  # 最后一个区间包含上界
+            if i == self.num_energy_bins - 1:  # Last bin includes upper bound
                 mask = (energies_flat >= self.E_bins[i]) & (energies_flat <= self.E_bins[i+1])
             
             num_samples_in_bin = mask.sum()
@@ -607,12 +607,12 @@ class CaloDataset(Dataset):
                 avg_shower = showers_in_bin.mean(dim=0, keepdim=True)
                 std_shower = showers_in_bin.std(dim=0, keepdim=True)
                 
-                print(f"  区间 {i}: [{self.E_bins[i]:.4f}, {self.E_bins[i+1]:.4f}] - {num_samples_in_bin} 个样本")
+                print(f"  Bin {i}: [{self.E_bins[i]:.4f}, {self.E_bins[i+1]:.4f}] - {num_samples_in_bin} samples")
             else:
-                # 如果该区间没有样本，使用全局统计
+                # If no samples in this bin, use global statistics
                 avg_shower = self.showers.mean(dim=0, keepdim=True)
                 std_shower = self.showers.std(dim=0, keepdim=True)
-                print(f"  区间 {i}: [{self.E_bins[i]:.4f}, {self.E_bins[i+1]:.4f}] - 0/1 个样本 (使用全局统计)")
+                print(f"  Bin {i}: [{self.E_bins[i]:.4f}, {self.E_bins[i+1]:.4f}] - 0/1 samples (using global stats)")
             
             avg_showers_list.append(avg_shower)
             std_showers_list.append(std_shower)
@@ -622,7 +622,7 @@ class CaloDataset(Dataset):
         
         print(f"  avg_showers: {self.avg_showers.shape}")
         print(f"  std_showers: {self.std_showers.shape}")
-        print(f"  E_bins: {self.E_bins.shape} - 范围 [{self.E_bins[0]:.4f}, {self.E_bins[-1]:.4f}]")
+        print(f"  E_bins: {self.E_bins.shape} - range [{self.E_bins[0]:.4f}, {self.E_bins[-1]:.4f}]")
 
     def __len__(self):
         return len(self.showers)
@@ -691,8 +691,8 @@ def get_calo_dataloader(
     )
 
     if reshape_method == 'nnconverter' and num_workers > 0:
-        print("[NNConverter] 警告: nnconverter 模式下 num_workers 将被强制设为 0 "
-              "(可训练模块无法跨进程共享)")
+        print("[NNConverter] Warning: num_workers forced to 0 in nnconverter mode "
+              "(trainable modules cannot be shared across processes)")
         num_workers = 0
 
     return DataLoader(

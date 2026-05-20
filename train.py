@@ -56,7 +56,7 @@ class RandomVolumeDataset(Dataset):
 
     def __getitem__(self, idx):
         D, H, W = self.volume_size
-        # 返回 (shower, energy, mask)
+        # Return (shower, energy, mask)
         return torch.randn(1, D, H, W), torch.rand(1), torch.ones(1, D, H, W)
 
 
@@ -67,9 +67,9 @@ def train(config: dict, hdf5_path: str = None, max_samples: int = None,
 
     cfg = load_config(None, dataset_name, particle)
 
-    # ====== 数据加载 ======
+    # ====== Data loading ======
     if hdf5_path:
-        print(f"加载数据: {hdf5_path}")
+        print(f"Loading data: {hdf5_path}")
         loader = get_calo_dataloader(
             hdf5_path,
             dataset_name=dataset_name,
@@ -93,53 +93,53 @@ def train(config: dict, hdf5_path: str = None, max_samples: int = None,
     else:
         if config['volume_size'] is None:
             config['volume_size'] = (45, 9, 16)
-        print("未提供数据文件，使用随机数据进行冒烟测试")
+        print("No data file provided, using random data for smoke test")
         ds     = RandomVolumeDataset(config['volume_size'])
         loader = DataLoader(ds, batch_size=config['batch_size'], shuffle=True)
 
     D, H, W = config['volume_size']
 
-    # ====== 打印训练配置 ======
+    # ====== Print training config ======
     print(f"{'='*70}")
-    print(f"训练配置:")
-    print(f"  数据集: {dataset_name}")
-    print(f"  设备: {device}")
-    print(f"  体积尺寸: (1, layers:{D}, anglebins:{H}, rbins:{W})")
-    print(f"  批次大小: {config['batch_size']}")
-    print(f"  训练轮次: {config['num_epochs']}")
-    print(f"  学习率: {config['lr']}")
+    print(f"Training config:")
+    print(f"  Dataset: {dataset_name}")
+    print(f"  Device: {device}")
+    print(f"  Volume size: (1, layers:{D}, anglebins:{H}, rbins:{W})")
+    print(f"  Batch size: {config['batch_size']}")
+    print(f"  Num epochs: {config['num_epochs']}")
+    print(f"  Learning rate: {config['lr']}")
     print(f"  " + "-" * 60)
-    print(f"  训练目标: {config['training_obj']}")
+    print(f"  Training objective: {config['training_obj']}")
     if config['energy_loss_scale'] > 0:
-        print(f"  能量损失权重: {config['energy_loss_scale']}")
+        print(f"  Energy loss weight: {config['energy_loss_scale']}")
     print(f"  " + "-" * 60)
-    print(f"  冷扩散: {config['cold_diffusion']}")
+    print(f"  Cold diffusion: {config['cold_diffusion']}")
     if config['cold_diffusion']:
-        print(f"  能量区间数: {config['num_energy_bins']}")
-        print(f"  噪声缩放: {config['cold_noise_scale']}")
+        print(f"  Num energy bins: {config['num_energy_bins']}")
+        print(f"  Noise scale: {config['cold_noise_scale']}")
     print(f"  " + "-" * 60)
-    print(f"  采样方法: {config['sample_method']}")
-    print(f"  采样步数: {config['num_steps']}")
+    print(f"  Sampling method: {config['sample_method']}")
+    print(f"  Sampling steps: {config['num_steps']}")
     if config['sample_method'] == 'ddim':
         print(f"  DDIM eta: {config['sample_eta']}")
     if config['sample_method'] == 'pc':
-        print(f"  PC 修正次数: {config['n_correct']}")
-        print(f"  PC 步长系数: {config['delta']}")
+        print(f"  PC correction steps: {config['n_correct']}")
+        print(f"  PC step size coefficient: {config['delta']}")
     print(f"  " + "-" * 60)
-    print(f"  径向处理方法: {config['reshape_method']}")  # 新增
+    print(f"  Radial processing method: {config['reshape_method']}")  # New
     if config['reshape_method'] == 'mask':
-        print(f"  使用mask覆盖: 是")
+        print(f"  Using mask: Yes")
     if config['reshape_method'] == 'nnconverter':
         nc = loader.dataset.nn_converter
         if nc is not None:
-            print(f"  NNConverter 层数: {nc.num_layers}, 输出维度: alpha={nc.alpha_out}, r={nc.dim_r_out}")
+            print(f"  NNConverter layers: {nc.num_layers}, output dims: alpha={nc.alpha_out}, r={nc.dim_r_out}")
     print(f"{'='*70}\n")
 
     E_bins = loader.dataset.E_bins
     avg_showers = loader.dataset.avg_showers
     std_showers = loader.dataset.std_showers
 
-    # ====== 创建模型 ======
+    # ====== Create model ======
     use_mask = (config['reshape_method'] == 'mask')
     nn_converter = getattr(loader.dataset, 'nn_converter', None)
     nn_binning_info = getattr(loader.dataset, 'nn_binning_info', None)
@@ -161,9 +161,9 @@ def train(config: dict, hdf5_path: str = None, max_samples: int = None,
     ).to(device)
 
     if nn_converter is not None:
-        print(f"[NNConverter] 编码器+解码器参数已纳入模型 (共 "
-              f"{sum(p.numel() for p in nn_converter.parameters())} 个)，"
-              f"两端均参与训练")
+        print(f"[NNConverter] Encoder+decoder params integrated into model (total "
+              f"{sum(p.numel() for p in nn_converter.parameters())}), "
+              f"both ends participate in training")
 
     optimizer = torch.optim.AdamW(
         model.parameters(),
@@ -177,16 +177,16 @@ def train(config: dict, hdf5_path: str = None, max_samples: int = None,
 
     start_epoch = 0
     
-    # ====== 检查点管理 ======
+    # ====== Checkpoint management ======
     obj_suffix = f"_{config['training_obj']}"
     cold_suffix = "_cold" if config['cold_diffusion'] else ""
     energy_suffix = f"_E{config['energy_loss_scale']}" if config['energy_loss_scale'] > 0 else ""
-    mask_suffix = "_mask" if config['reshape_method'] == 'mask' else ""  # 新增
+    mask_suffix = "_mask" if config['reshape_method'] == 'mask' else ""  # New
     
     config['checkpoint'] = f"models/ddim3d_{dataset_name}_{particle}{obj_suffix}{cold_suffix}{energy_suffix}{mask_suffix}.pt"
     
     if os.path.exists(config['checkpoint']):
-        print(f"发现检查点文件: {config['checkpoint']}")
+        print(f"Found checkpoint: {config['checkpoint']}")
         try:
             ckpt = torch.load(config['checkpoint'], map_location=device, weights_only=False)
             model.load_state_dict(ckpt['model'], strict=False)
@@ -202,15 +202,15 @@ def train(config: dict, hdf5_path: str = None, max_samples: int = None,
             
             saved_obj = ckpt.get('training_obj', 'unknown')
             if saved_obj != config['training_obj']:
-                print(f"  警告: 检查点训练目标 ({saved_obj}) 与当前设置 ({config['training_obj']}) 不匹配!")
+                print(f"  Warning: checkpoint training objective ({saved_obj}) does not match current ({config['training_obj']})!")
             
-            print(f"从 epoch {start_epoch} 继续训练\n")
+            print(f"Resuming from epoch {start_epoch}\n")
         except Exception as e:
-            print(f"加载检查点失败: {e}")
-            print("从头开始训练\n")
+            print(f"Failed to load checkpoint: {e}")
+            print("Starting from scratch\n")
             start_epoch = 0
 
-    print(f"\n开始训练...")
+    print(f"\nStarting training...")
     print(f"{'='*70}\n")
 
     os.makedirs('samples', exist_ok=True)
@@ -225,14 +225,14 @@ def train(config: dict, hdf5_path: str = None, max_samples: int = None,
         num_batches = 0
 
         for batch_data in loader:
-            # 解包数据: (showers, energies, masks)
+            # Unpack data: (showers, energies, masks)
             if len(batch_data) == 3:
                 x0, energies, mask = batch_data
                 x0 = x0.to(device)
                 energies = energies.to(device)
                 mask = mask.to(device)
             else:
-                # 兼容旧格式
+                # Backward compatible with old format
                 x0, energies = batch_data
                 x0 = x0.to(device)
                 energies = energies.to(device)
@@ -241,7 +241,7 @@ def train(config: dict, hdf5_path: str = None, max_samples: int = None,
             loss = model.get_loss(
                 x0, 
                 energies,
-                mask=mask,  # 新增
+                mask=mask,  # New
                 energy_loss_scale=config['energy_loss_scale']
             )
 
@@ -269,7 +269,7 @@ def train(config: dict, hdf5_path: str = None, max_samples: int = None,
                   f"Best: {best_loss:.5f} (Epoch {best_epoch})  |  "
                   f"LR: {current_lr:.2e}")
 
-        # ====== 定期采样和保存 ======
+        # ====== Periodic sampling and saving ======
         if epoch>=49 and ((epoch + 1) % config['save_every'] == 0 or (epoch + 1) == best_epoch):
             model.eval()
             '''
@@ -285,7 +285,7 @@ def train(config: dict, hdf5_path: str = None, max_samples: int = None,
                     sample_energies_list,
                     device=device
                 ).reshape(-1, 1)
-                print(f"\n  采样能量: {sample_energies_list}")
+                print(f"\n  Sample energies: {sample_energies_list}")
             else:
                 sample_energies_tensor = torch.ones(num_energy_samples, 1, device=device)
 
@@ -311,7 +311,7 @@ def train(config: dict, hdf5_path: str = None, max_samples: int = None,
                 'training_obj': config['training_obj'],
                 'sample_method': config['sample_method'],
             }, sample_path)
-            print(f"  → 样本保存至: {sample_path}")
+            print(f"  -> Samples saved to: {sample_path}")
             '''
             vmax = loader.dataset.vmax if hdf5_path else None
 
@@ -355,22 +355,22 @@ def train(config: dict, hdf5_path: str = None, max_samples: int = None,
             }
             
             torch.save(checkpoint_data, config['checkpoint'])
-            print(f"  → 检查点保存至: {config['checkpoint']}")
+            print(f"  -> Checkpoint saved to: {config['checkpoint']}")
             
             if (epoch+1) == best_epoch:
                 best_checkpoint = config['checkpoint'].replace('.pt', '_best.pt')
                 torch.save(checkpoint_data, best_checkpoint)
-                print(f"  → 最佳模型保存至: {best_checkpoint}")
+                print(f"  -> Best model saved to: {best_checkpoint}")
             
             print()
 
     print(f"\n{'='*70}")
-    print("训练完成！")
-    print(f"  最佳损失: {best_loss:.5f} (Epoch {best_epoch})")
-    print(f"  最终检查点: {config['checkpoint']}")
+    print("Training complete!")
+    print(f"  Best loss: {best_loss:.5f} (Epoch {best_epoch})")
+    print(f"  Final checkpoint: {config['checkpoint']}")
     print(f"{'='*70}")
 
-    # 绘制 loss 曲线
+    # Plot loss curve
     plt.figure(figsize=(10, 5))
     plt.plot(range(1, len(loss_history) + 1), loss_history, marker='o', markersize=3, linewidth=1.5)
     plt.xlabel('Epoch')
@@ -397,55 +397,55 @@ if __name__ == '__main__':
 
     cfg = load_config(None, pre_args.dataset, pre_args.particle)
 
-    # ---- 主解析器：默认值来自 config.json，用户 CLI 参数可覆盖 ----
+    # ---- Main parser: defaults from config.json, user CLI args can override ----
     parser = argparse.ArgumentParser(
-        description='训练 3D DDIM 模型 — 默认参数根据 --dataset / --particle 从 config.json 读取',
+        description='Train 3D DDIM model — defaults from config.json based on --dataset / --particle',
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
         allow_abbrev=False,
     )
 
-    # 数据参数
-    data_group = parser.add_argument_group('数据参数')
+    # Data params
+    data_group = parser.add_argument_group('Data params')
     data_group.add_argument('--data', type=str,
                             default=cfg.get('default_data', None),
-                            help='HDF5数据文件路径')
+                            help='HDF5 data file path')
     data_group.add_argument('--dataset', type=str, default=pre_args.dataset,
-                           choices=['dataset1', 'dataset2', 'dataset3'], help='数据集类型')
-    data_group.add_argument('--max_samples', type=int, default=None, help='最大样本数')
+                           choices=['dataset1', 'dataset2', 'dataset3'], help='Dataset type')
+    data_group.add_argument('--max_samples', type=int, default=None, help='Max samples')
     data_group.add_argument('--xml', type=str,
                             default=cfg.get('default_xml', None),
-                            help='XML几何文件路径')
+                            help='XML geometry file path')
     data_group.add_argument('--particle', type=str, default=pre_args.particle,
-                           choices=['photon', 'pion', 'electron'], help='粒子类型')
+                           choices=['photon', 'pion', 'electron'], help='Particle type')
     data_group.add_argument('--weight_cache', type=str,
                             default=cfg.get('weight_cache', 'data/weight_mats.pkl'))
     data_group.add_argument('--reshape_method', type=str,
                             default=cfg.get('reshape_method', 'weight'),
                             choices=['weight', 'mask', 'nnconverter'],
-                            help='径向处理方法: weight=面积权重插值, mask=向内填充+mask, nnconverter=可训练几何转换')
+                            help='Radial processing method: weight=area-weight interpolation, mask=zero-pad+mask, nnconverter=trainable geometric conversion')
     data_group.add_argument('--prenormalize_method', type=str,
                             default=cfg.get('prenormalize_method', 'log10'),
                             choices=['log10', 'log1p', 'sqrt'],
-                            help='预处理方法')
+                            help='Prenormalize method')
 
-    # 训练参数
-    train_group = parser.add_argument_group('训练参数')
+    # Training params
+    train_group = parser.add_argument_group('Training params')
     train_group.add_argument('--epochs', type=int, default=cfg.get('num_epochs', 40))
     train_group.add_argument('--batch', type=int, default=cfg.get('batch_size', 8))
     train_group.add_argument('--lr', type=float, default=cfg.get('lr', 4e-4))
 
-    # 训练目标参数
-    objective_group = parser.add_argument_group('训练目标参数')
+    # Training objective params
+    objective_group = parser.add_argument_group('Training objective params')
     objective_group.add_argument('--training_obj', type=str,
                                 default=cfg.get('training_obj', 'hybrid'),
                                 choices=['noise_pred', 'mean_pred', 'hybrid', 'score_pred'],
-                                help='训练目标')
+                                help='Training objective')
     objective_group.add_argument('--energy_loss_scale', type=float,
                                 default=cfg.get('energy_loss_scale', 0.0),
-                                help='能量守恒损失权重（推荐0.001-0.01）')
+                                help='Energy conservation loss weight (recommended 0.001-0.01)')
 
-    # 冷扩散参数
-    cold_group = parser.add_argument_group('冷扩散参数')
+    # Cold diffusion params
+    cold_group = parser.add_argument_group('Cold diffusion params')
     cold_group.add_argument('--cold_diffusion', action='store_true',
                             default=cfg.get('cold_diffusion', False))
     cold_group.add_argument('--num_energy_bins', type=int,
@@ -453,8 +453,8 @@ if __name__ == '__main__':
     cold_group.add_argument('--cold_noise_scale', type=float,
                             default=cfg.get('cold_noise_scale', 1.0))
 
-    # 采样参数
-    sample_group = parser.add_argument_group('采样参数')
+    # Sampling params
+    sample_group = parser.add_argument_group('Sampling params')
     sample_group.add_argument('--sample_method', type=str,
                               default=cfg.get('sample_method', 'pndm'),
                               choices=['pndm', 'ddim', 'euler_maruyama', 'prob_flow', 'pc'])
@@ -462,19 +462,19 @@ if __name__ == '__main__':
                               default=cfg.get('sample_eta', 0.0))
     sample_group.add_argument('--n_correct', type=int,
                               default=cfg.get('n_correct', 1),
-                              help='PC采样朗之万修正次数')
+                              help='PC Langevin correction steps')
     sample_group.add_argument('--delta', type=float,
                               default=cfg.get('delta', 0.17),
-                              help='PC采样朗之万步长系数')
+                              help='PC Langevin step size coefficient')
     sample_group.add_argument('--num_steps', type=int,
                               default=cfg.get('num_steps', 50))
 
     args = parser.parse_args()
 
     if args.dataset == 'dataset1' and args.xml is None:
-        parser.error("dataset1 需要提供 --xml 参数")
+        parser.error("dataset1 requires --xml argument")
 
-    # 若用户通过 CLI 更改了 dataset/particle（与预解析不同），重载对应 config
+    # If user changed dataset/particle via CLI (different from pre-parsed), reload corresponding config
     if args.dataset != pre_args.dataset or args.particle != pre_args.particle:
         cfg = load_config(None, args.dataset, args.particle)
 
@@ -501,10 +501,10 @@ if __name__ == '__main__':
 
 
 # ============================================================================
-# 使用示例
+# Usage examples
 # ============================================================================
 '''
-# 1. 使用mask方法训练 Dataset1
+# 1. Train Dataset1 with mask method
 python train.py --data data/dataset_1_photons_1.hdf5 --dataset dataset1 \
     --xml data/binning_dataset_1_photons.xml --particle photon \
     --reshape_method mask --training_obj mean_pred --epochs 200 --max_samples 200 \
@@ -522,17 +522,17 @@ python train.py --data data/dataset_1_photons_1.hdf5 --dataset dataset1 \
     --xml data/binning_dataset_1_photons.xml --particle photon \
     --reshape_method mask --training_obj hybrid --epochs 200 --max_samples 200
 
-# 2. 使用weight方法训练（默认，兼容原有代码）
+# 2. Train with weight method (default, backward compatible)
 python train.py --data data/dataset_1_photons_1.hdf5 --dataset dataset1 \
     --xml data/binning_dataset_1_photons.xml --particle photon \
     --reshape_method weight --training_obj mean_pred --epochs 200 --max_samples 200
 
-# 3. mask方法 + 冷扩散
+# 3. Mask method + cold diffusion
 python train.py --data data/dataset_1_photons_1.hdf5 --dataset dataset1 \
     --xml data/binning_dataset_1_photons.xml --particle photon \
     --reshape_method mask --training_obj hybrid \
     --cold_diffusion --num_energy_bins 10 --epochs 200
 
-# 4. Dataset2 (不受影响，默认全1 mask)
-python train.py  --dataset dataset2 --training_obj mean_pred --epochs 150 
+# 4. Dataset2 (unaffected, default all-ones mask)
+python train.py  --dataset dataset2 --training_obj mean_pred --epochs 150
 '''

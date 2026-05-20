@@ -15,7 +15,7 @@ class DDIMModel3D(nn.Module):
         e_dim: int = 128,
         training_obj: str = 'noise_pred',  # 'noise_pred', 'mean_pred', 'hybrid'
         cold_diffusion: bool = False,
-        E_bins: torch.Tensor = None,
+        E_bins: torch.Tensor = None, # type: ignore
         avg_showers: torch.Tensor = None,
         std_showers: torch.Tensor = None,
         cold_noise_scale: float = 1.0,
@@ -31,7 +31,7 @@ class DDIMModel3D(nn.Module):
         self.training_obj = training_obj
         supported = ['noise_pred', 'mean_pred', 'hybrid', 'score_pred']
         if self.training_obj not in supported:
-            raise ValueError(f"training_obj 必须是 {supported} 之一，但得到 '{training_obj}'")
+            raise ValueError(f"training_obj must be one of {supported}, got '{training_obj}'")
 
         self.cold_diffusion = cold_diffusion
         self.E_bins = E_bins
@@ -45,14 +45,14 @@ class DDIMModel3D(nn.Module):
         self.nn_binning_info = nn_binning_info
         self.irreg_shapes = irreg_shapes
 
-        print(f"[Model] 训练目标: {self.training_obj}")
-        print(f"[Model] 使用mask: {self.use_mask}")
+        print(f"[Model] Training objective: {self.training_obj}")
+        print(f"[Model] Using mask: {self.use_mask}")
         if self.nn_converter is not None:
-            print(f"[Model] NNConverter 已集成，共 {self.nn_converter.num_layers} 层")
+            print(f"[Model] NNConverter integrated, {self.nn_converter.num_layers} layers total")
         if self.cold_diffusion:
-            print("[Model] 冷扩散模式已启用")
+            print("[Model] Cold diffusion mode enabled")
             if E_bins is None or avg_showers is None or std_showers is None:
-                raise ValueError("冷扩散模式需要提供 E_bins, avg_showers, std_showers")
+                raise ValueError("Cold diffusion mode requires E_bins, avg_showers, std_showers")
 
     def _broadcast(self, rate: torch.Tensor) -> torch.Tensor:
         if rate.ndim == 0:
@@ -60,7 +60,7 @@ class DDIMModel3D(nn.Module):
         return rate[:, None, None, None, None]
 
     def lookup_avg_std_shower(self, energies: torch.Tensor):
-        """根据能量查找对应的平均和标准差 shower"""
+        """Look up avg and std shower by energy"""
         energies_flat = energies.squeeze()
         
         idxs = torch.bucketize(energies_flat, self.E_bins.to(energies.device)) - 1
@@ -78,13 +78,13 @@ class DDIMModel3D(nn.Module):
         cold_noise_scale: float = 1.0, 
         noise: torch.Tensor = None
     ) -> torch.Tensor:
-        """生成冷扩散初始图像"""
+        """Generate cold diffusion initial image"""
         avg_shower, std_shower = self.lookup_avg_std_shower(energy)
         
         if noise is None:
             noise = torch.randn_like(avg_shower)
         
-        # 公式: avg_shower + cold_noise_scale * (noise * std_shower)
+        # Formula: avg_shower + cold_noise_scale * (noise * std_shower)
         cold_image = avg_shower + cold_noise_scale * (noise * std_shower)
         
         return cold_image
@@ -193,7 +193,7 @@ class DDIMModel3D(nn.Module):
 
         net_output = self.net(x_t, t, energy)
 
-        # 计算基础loss
+        # Compute base loss
         if self.training_obj == 'noise_pred':
             target = eps
             pred = net_output
@@ -223,7 +223,7 @@ class DDIMModel3D(nn.Module):
             pred   = nr * net_output
             loss_element = F.mse_loss(pred, target, reduction='none')
 
-        # 应用mask（如果使用）
+        # Apply mask (if using)
         if self.use_mask and mask is not None:
             loss_element = loss_element * mask
             num_valid = mask.sum() + 1e-8
@@ -245,12 +245,12 @@ class DDIMModel3D(nn.Module):
         mask: torch.Tensor = None
     ) -> torch.Tensor:
         """
-        计算能量守恒损失
+        Compute energy conservation loss.
         Args:
-            x0_true: 真实数据
-            x0_pred: 预测数据
-            scale: 损失权重
-            mask: mask数组（可选）
+            x0_true: ground truth data
+            x0_pred: predicted data
+            scale: loss weight
+            mask: mask array (optional)
         """
         dims = list(range(1, len(x0_true.shape)))
         
@@ -292,7 +292,7 @@ class DDIMModel3D(nn.Module):
             x0_pred = c_skip * x_t + c_out * net_output
 
         elif self.training_obj == 'score_pred':
-            # Tweedie公式: x0 = (x_t + σ² · s_θ) / sr
+            # Tweedie's formula: x0 = (x_t + σ² · s_θ) / sr
             x0_pred = (x_t + sigma2 * net_output) / sr
 
         return x0_pred
@@ -335,9 +335,9 @@ class DDIMModel3D(nn.Module):
         net_output: torch.Tensor,
         t: torch.Tensor,
     ) -> torch.Tensor:
-        """从网络输出计算 score = ∇_x log p_t(x) = -ε/nr
+        """Compute score = ∇_x log p_t(x) = -ε/nr from network output.
 
-        适用于所有训练目标，通过先计算 ε_pred 再转换。
+        Applicable to all training objectives by first computing ε_pred then converting.
         """
         eps_pred = self.predict_eps_from_output(x_t, net_output, t)
         _, nr = self.schedule(t)
@@ -377,7 +377,7 @@ class DDIMModel3D(nn.Module):
         energy: torch.Tensor,
     ) -> torch.Tensor:
         """
-        4阶Runge-Kutta方法
+        4th-order Runge-Kutta method.
         """
         t_mid = (t + t_next) / 2
         B = x.shape[0]
@@ -411,7 +411,7 @@ class DDIMModel3D(nn.Module):
         energy: torch.Tensor,
     ) -> torch.Tensor:
         """
-        4阶PNDM采样
+        4th-order PNDM sampling.
         """
         if len(ets) > 2:
             e_cur = self.net(x, t.expand(x.shape[0]), energy)
@@ -440,7 +440,7 @@ class DDIMModel3D(nn.Module):
         num_steps: int = 200,
         device: str = 'cpu',
         cold_noise_scale: float = 1.0,
-        eta: float = 0.0,  # DDIM参数，0=确定性，1=DDPM
+        eta: float = 0.0,  # DDIM parameter, 0=deterministic, 1=DDPM
     ) -> torch.Tensor:
         energy = energy.to(device)
         
@@ -449,13 +449,13 @@ class DDIMModel3D(nn.Module):
             noise = torch.randn(shape, device=device)
             x = avg_showers + cold_noise_scale * (std_showers * noise)
             
-            print(f"[Cold Diffusion DDIM] 初始化范围: [{x.min():.4f}, {x.max():.4f}]")
+            print(f"[Cold Diffusion DDIM] Initial range: [{x.min():.4f}, {x.max():.4f}]")
         else:
             x = torch.randn(shape, device=device)
         
         ts = torch.linspace(0.999, 0.001, num_steps + 1, device=device)
         
-        for step in tqdm(range(num_steps), desc="DDIM采样"):
+        for step in tqdm(range(num_steps), desc="DDIM sampling"):
             t = ts[step]
             t_next = ts[step + 1]
             
@@ -485,7 +485,7 @@ class DDIMModel3D(nn.Module):
             
             x = x_next
         
-        print(f"[DDIM] 最终范围: [{x.min():.4f}, {x.max():.4f}]")
+        print(f"[DDIM] Final range: [{x.min():.4f}, {x.max():.4f}]")
         return x
 
     @torch.no_grad()
@@ -498,29 +498,29 @@ class DDIMModel3D(nn.Module):
         cold_noise_scale: float = 1.0,
     ) -> torch.Tensor:
         energy = energy.to(device)
-        ets = []  # 存储历史网络输出
+        ets = []  # Store history of network outputs
         
         if self.cold_diffusion:
             avg_showers, std_showers = self.lookup_avg_std_shower(energy)
             noise = torch.randn(shape, device=device)
             x = avg_showers + cold_noise_scale * (std_showers * noise)
             
-            print(f"[Cold Diffusion PNDM] 初始化范围: [{x.min():.4f}, {x.max():.4f}]")
+            print(f"[Cold Diffusion PNDM] Initial range: [{x.min():.4f}, {x.max():.4f}]")
         else:
             x = torch.randn(shape, device=device)
         
         ts = torch.linspace(0.999, 0.001, num_steps + 1, device=device)
         
-        for step in tqdm(range(num_steps), desc="PNDM采样"):
+        for step in tqdm(range(num_steps), desc="PNDM sampling"):
             t = ts[step]
             t_next = ts[step + 1]
             x = self.gen_order_4(x, t, t_next, ets, energy)
         
-        print(f"[PNDM] 最终范围: [{x.min():.4f}, {x.max():.4f}]")
+        print(f"[PNDM] Final range: [{x.min():.4f}, {x.max():.4f}]")
         return x
 
     # ========================================================================
-    #  分数扩散采样方法 (Score-based SDE/ODE samplers)
+    #  Score-based diffusion sampling methods (SDE/ODE samplers)
     # ========================================================================
 
     @torch.no_grad()
@@ -532,10 +532,10 @@ class DDIMModel3D(nn.Module):
         device: str = 'cpu',
         cold_noise_scale: float = 1.0,
     ) -> torch.Tensor:
-        """Euler-Maruyama 离散化逆SDE采样
+        """Euler-Maruyama discretized reverse SDE sampling.
 
-        逆SDE: dx = [-½β(t)x - β(t)∇_x log p_t(x)] dt + √β(t) dW̄
-        离散化: x_{t-Δt} = x_t + ½β(t)x_t·Δt + β(t)·s_θ(x_t,t)·Δt + √(β(t)·Δt)·z
+        Reverse SDE: dx = [-½β(t)x - β(t)∇_x log p_t(x)] dt + √β(t) dW̄
+        Discretization: x_{t-Δt} = x_t + ½β(t)x_t·Δt + β(t)·s_θ(x_t,t)·Δt + √(β(t)·Δt)·z
         """
         energy = energy.to(device)
 
@@ -560,16 +560,16 @@ class DDIMModel3D(nn.Module):
             net_output = self.net(x, t_cur.expand(x.shape[0]), energy)
             score = self.predict_score_from_output(x, net_output, t_cur.expand(x.shape[0]))
 
-            # 确定性部分: drift
+            # Deterministic part: drift
             drift = 0.5 * beta_t * x + beta_t * score
 
-            # 随机部分: diffusion
+            # Stochastic part: diffusion
             noise = torch.randn_like(x)
             diffusion = g_t * torch.sqrt(dt) * noise
 
             x = x + drift * dt + diffusion
 
-        print(f"[Euler-Maruyama] 最终范围: [{x.min():.4f}, {x.max():.4f}]")
+        print(f"[Euler-Maruyama] Final range: [{x.min():.4f}, {x.max():.4f}]")
         return x
 
     @torch.no_grad()
@@ -581,10 +581,10 @@ class DDIMModel3D(nn.Module):
         device: str = 'cpu',
         cold_noise_scale: float = 1.0,
     ) -> torch.Tensor:
-        """Probability Flow ODE 采样 (确定性)
+        """Probability Flow ODE sampling (deterministic).
 
         ODE: dx/dt = f(x,t) - ½g(t)²·∇_x log p_t(x)
-        离散化: x_{t-Δt} = x_t + ½β(t)x_t·Δt + ½β(t)·s_θ(x_t,t)·Δt
+        Discretization: x_{t-Δt} = x_t + ½β(t)x_t·Δt + ½β(t)·s_θ(x_t,t)·Δt
         """
         energy = energy.to(device)
 
@@ -611,7 +611,7 @@ class DDIMModel3D(nn.Module):
             drift = 0.5 * beta_t * x + 0.5 * beta_t * score
             x = x + drift * dt
 
-        print(f"[ProbFlow ODE] 最终范围: [{x.min():.4f}, {x.max():.4f}]")
+        print(f"[ProbFlow ODE] Final range: [{x.min():.4f}, {x.max():.4f}]")
         return x
 
     @torch.no_grad()
@@ -625,14 +625,14 @@ class DDIMModel3D(nn.Module):
         n_correct: int = 1,
         delta: float = 0.17,
     ) -> torch.Tensor:
-        """Predictor-Corrector 采样
+        """Predictor-Corrector sampling.
 
         Predictor: Euler-Maruyama SDE step
-        Corrector: Langevin MCMC (退火朗之万动力学)
+        Corrector: Langevin MCMC (annealed Langevin dynamics)
 
         Args:
-            n_correct: 每个预测步后的朗之万修正次数
-            delta: 朗之万步长系数 (ε_l = δ · nr(t)²)
+            n_correct: number of Langevin correction steps per predictor step
+            delta: Langevin step size coefficient (ε_l = δ · nr(t)²)
         """
         energy = energy.to(device)
 
@@ -675,7 +675,7 @@ class DDIMModel3D(nn.Module):
 
                 x = x + epsilon_l * score + torch.sqrt(2 * epsilon_l) * langevin_noise
 
-        print(f"[Predictor-Corrector] 最终范围: [{x.min():.4f}, {x.max():.4f}]")
+        print(f"[Predictor-Corrector] Final range: [{x.min():.4f}, {x.max():.4f}]")
         return x
 
     @torch.no_grad()
@@ -704,6 +704,6 @@ class DDIMModel3D(nn.Module):
             return self.pc_sample(shape, energy, num_steps, device, cold_noise_scale, n_correct, delta)
         else:
             raise ValueError(
-                f"不支持的采样方法: {method}，"
-                f"请选择 'pndm', 'ddim', 'euler_maruyama', 'prob_flow', 'pc'"
+                f"Unsupported sampling method: {method}, "
+                f"choose from 'pndm', 'ddim', 'euler_maruyama', 'prob_flow', 'pc'"
             )
